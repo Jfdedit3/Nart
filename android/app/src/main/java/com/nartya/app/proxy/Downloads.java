@@ -12,7 +12,6 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.RandomAccessFile;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.List;
@@ -42,8 +41,6 @@ public class Downloads {
         void onProgress(JSONObject item);
     }
 
-    private static final int MP4_CONNECTIONS = 4;
-    private static final long MP4_MIN_PARALLEL_BYTES = 8L * 1024 * 1024;
     private static final int HLS_SEGMENT_CONCURRENCY = 6;
     private static final int SCAN_PAGE_CONCURRENCY = 6;
     private static final int IO_THREADS = 12; // 2 jobs × 6 segments au maximum
@@ -464,26 +461,10 @@ public class Downloads {
     // MP4
 
     private long[] downloadMp4(String id, String url, SourceContext source, File dir, AtomicBoolean cancel) throws Exception {
-        long total = 0;
-        boolean acceptsRange = false;
-        try {
-            Response probe = fetch(url, source, false, "bytes=0-1");
-            if (probe.code() == 206) {
-                String cr = probe.header("Content-Range");
-                Matcher m = cr != null ? Pattern.compile("/(\\d+)\\s*$").matcher(cr) : null;
-                if (m != null && m.find()) { total = Long.parseLong(m.group(1)); acceptsRange = true; }
-            }
-            probe.close();
-        } catch (Exception ignored) {}
-
-        if (acceptsRange && total > MP4_MIN_PARALLEL_BYTES && !new File(dir, "video.sequential.part").exists()) {
-            try {
-                return downloadMp4Parallel(id, url, source, dir, total, cancel);
-            } catch (Exception e) {
-                if (cancel.get()) throw e;
-                // repli mono-flux
-            }
-        }
+        // A contiguous prefix supports pause and process recovery without sparse-file ambiguity.
+        // Discard legacy parallel files: their length never established which ranges were complete.
+        new File(dir, "video.mp4.part").delete();
+        new File(dir, "video.parallel.part").delete();
         return downloadMp4Single(id, url, source, dir, cancel);
     }
 
@@ -545,71 +526,6 @@ public class Downloads {
         validatorFile.delete();
         sourceFile.delete();
         return new long[]{received};
-    }
-
-    private long[] downloadMp4Parallel(String id, String url, SourceContext source, File dir, long total, AtomicBoolean cancel) throws Exception {
-        File dest = new File(dir, "video.mp4");
-        File tmp = new File(dir, "video.parallel.part");
-        int parts = Math.max(1, (int) Math.min(MP4_CONNECTIONS, (total + MP4_MIN_PARALLEL_BYTES - 1) / MP4_MIN_PARALLEL_BYTES));
-        long chunk = (total + parts - 1) / parts;
-        AtomicLong received = new AtomicLong(0);
-        List<Future<?>> futures = new ArrayList<>();
-        final long[] lastEmit = {0};
-        // If a resource changes between requests, no parallel assembly is safe without a strong ETag.
-        String etag;
-        try (Response probe = fetch(url, source, false, "bytes=0-1")) { etag = probe.header("ETag", ""); }
-        if (etag.isEmpty() || etag.startsWith("W/")) {
-            tmp.delete();
-            throw new IOException("Assemblage parallèle sans validateur fort");
-        }
-        if (policy != null) policy.check(total);
-        try (RandomAccessFile raf = new RandomAccessFile(tmp, "rw")) {
-            raf.setLength(0);
-            raf.setLength(total);
-        }
-        for (int i = 0; i < parts; i++) {
-            final long start = i * chunk;
-            if (start >= total) break;
-            final long end = Math.min(start + chunk - 1, total - 1);
-            futures.add(io.submit(() -> {
-                try (Response res = fetch(url, source, false, "bytes=" + start + "-" + end, etag)) {
-                    if (res.code() != 206 || !etag.equals(res.header("ETag"))
-                            || !DownloadFiles.validRange(res.header("Content-Range"), start, end)
-                            || totalFromContentRange(res.header("Content-Range"), 0, 0) != total) {
-                        throw new IOException("Plage vidéo ou ETag invalide");
-                    }
-                    long written = 0;
-                    try (InputStream in = res.body().byteStream(); RandomAccessFile raf = new RandomAccessFile(tmp, "rw")) {
-                        raf.seek(start);
-                        byte[] buf = new byte[64 * 1024];
-                        int n;
-                        while ((n = in.read(buf)) != -1) {
-                            checkTransfer(cancel);
-                            if (written + n > end - start + 1) throw new IOException("Plage vidéo trop longue");
-                            raf.write(buf, 0, n);
-                            written += n;
-                            long tot = received.addAndGet(n);
-                            synchronized (lastEmit) {
-                                if (System.currentTimeMillis() - lastEmit[0] > 400) {
-                                    lastEmit[0] = System.currentTimeMillis();
-                                    patch(id, "status", "downloading", "percent", tot * 100.0 / total, "sizeBytes", tot);
-                                }
-                            }
-                        }
-                        DownloadFiles.requireLength(written, end - start + 1);
-                        raf.getFD().sync();
-                    }
-                }
-                return null;
-            }));
-        }
-        try {
-            awaitAll(futures); // wait for all writers before touching the temporary file
-            DownloadFiles.requireLength(received.get(), total);
-            checkTransfer(cancel);
-            DownloadFiles.commit(tmp, dest);
-        } finally { tmp.delete(); }
-        return new long[]{total};
     }
 
     // HLS

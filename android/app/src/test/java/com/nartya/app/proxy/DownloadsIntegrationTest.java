@@ -50,7 +50,7 @@ public class DownloadsIntegrationTest {
         assertTrue("transfer completed", finished.await(20, TimeUnit.SECONDS));
         assertEquals(result.get().optString("error"), "done", result.get().optString("status"));
     }
-    @Test public void parallelFailureRestartsWithoutUsingSparseFileLength() throws Exception {
+    @Test public void legacySparseFilesAreNeverReusedAsCompletedPrefixes() throws Exception {
         byte[] video = new byte[9 * 1024 * 1024];
         for (int i = 0; i < video.length; i++) video[i] = (byte)(i % 251);
         server.setDispatcher(new Dispatcher() {
@@ -63,6 +63,10 @@ public class DownloadsIntegrationTest {
                 return new MockResponse().setHeader("ETag", "\"v1\"").setBody(new Buffer().write(video));
             }
         });
+        File legacyDir = ProxyServer.itemDir("parallel"); assertTrue(legacyDir.mkdirs());
+        try (java.io.RandomAccessFile sparse = new java.io.RandomAccessFile(new File(legacyDir, "video.mp4.part"), "rw")) {
+            sparse.setLength(video.length);
+        }
         assertTrue(downloads.start(payload("parallel"))); awaitSuccess();
         assertArrayEquals(video, Files.readAllBytes(new File(ProxyServer.itemDir("parallel"), "video.mp4").toPath()));
         assertFalse(new File(ProxyServer.itemDir("parallel"), "video.parallel.part").exists());
@@ -156,5 +160,21 @@ public class DownloadsIntegrationTest {
         assertEquals("paused", downloads.list().get(0).optString("status"));
         assertTrue(partial.length() > 0);
         assertFalse(new File(partial.getParentFile(), "video.mp4").exists());
+        long offset = partial.length();
+        java.util.concurrent.atomic.AtomicBoolean resumed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        server.setDispatcher(new Dispatcher() {
+            @Override public MockResponse dispatch(RecordedRequest request) {
+                if (("bytes=" + offset + "-").equals(request.getHeader("Range")) && "\"v1\"".equals(request.getHeader("If-Range"))) {
+                    resumed.set(true);
+                    return new MockResponse().setResponseCode(206).setHeader("ETag", "\"v1\"")
+                        .setHeader("Content-Range", "bytes " + offset + "-" + (video.length - 1) + "/" + video.length)
+                        .setBody(new Buffer().write(video, (int)offset, video.length - (int)offset));
+                }
+                return new MockResponse().setHeader("ETag", "\"v1\"").setBody(new Buffer().write(video));
+            }
+        });
+        assertTrue(downloads.start(payload("pause"))); awaitSuccess();
+        assertTrue("the retained prefix was resumed", resumed.get());
+        assertArrayEquals(video, Files.readAllBytes(new File(partial.getParentFile(), "video.mp4").toPath()));
     }
 }

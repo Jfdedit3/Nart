@@ -97,7 +97,7 @@ quota. Une réserve de 100 Mo protège le stockage du téléphone. Baisser le qu
 fichier ; le nettoyage des épisodes terminés exige une confirmation et un compte connecté.
 
 Les MP4 ne reprennent un préfixe que si l’URL source, un ETag fort et les plages concordent. Sans validateur
-fiable, ils redémarrent pour éviter d'assembler deux fichiers différents. Le mode parallèle
-utilise un fichier distinct et le supprime s'il échoue. Un changement de playlist HLS invalide
+fiable, ils redémarrent pour éviter d'assembler deux fichiers différents. Les MP4 Android utilisent un flux continu pour conserver un préfixe reprenable lors d’une pause ;
+les anciens fichiers parallèles préalloués sont éliminés. Les segments HLS restent parallèles. Un changement de playlist HLS invalide
 les fragments précédents ; les clés et initialisations multiples sont conservées séparément.
 Les playlists HLS par plages (`EXT-X-BYTERANGE`) sont refusées explicitement par le téléchargement.
