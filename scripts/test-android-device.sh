@@ -2,8 +2,8 @@
 set -euo pipefail
 cd android
 # Debug-signed, minified release is QA-only; it is never uploaded as the release APK.
-bash ./gradlew connectedDebugAndroidTest --console=plain
-bash ./gradlew connectedReleaseAndroidTest -PnartyaQaRelease=true --console=plain
+bash ./gradlew :app:connectedDebugAndroidTest --console=plain
+bash ./gradlew :app:connectedReleaseAndroidTest -PnartyaQaRelease=true --console=plain
 # Prove a same-key upgrade installs without uninstalling or clearing data.
 bash ./gradlew assembleDebug --console=plain
 adb install -r app/build/outputs/apk/debug/app-debug.apk

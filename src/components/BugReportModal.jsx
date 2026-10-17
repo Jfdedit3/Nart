@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -75,6 +76,7 @@ export default function BugReportModal({ onClose, onSubmitted, context = null, d
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
+  useNativeBack(true, () => { if (!busy) onClose(); });
   const pickFile = (f) => {
     if (!f) return;
     if (!f.type.startsWith("image/")) return toast.error("Seules les images sont acceptées.");

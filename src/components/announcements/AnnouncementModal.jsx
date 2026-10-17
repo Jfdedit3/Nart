@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { X, Info, CheckCircle2, AlertTriangle, Link as LinkIcon } from "lucide-react";
@@ -24,6 +25,7 @@ export default function AnnouncementModal({ announcement, onClose }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  useNativeBack(!!announcement, onClose);
   if (!announcement) return null;
   const a = announcement;
   const meta = TYPE_META[a.type] || TYPE_META.info;

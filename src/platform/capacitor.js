@@ -245,6 +245,17 @@ function attachUrlListener() {
 
 if (Capacitor.isNativePlatform()) {
   attachUrlListener();
+  void App.getLaunchUrl().then(({ url } = {}) => {
+    if (!url) return;
+    const parsed = new URL(url);
+    if (parsed.hostname === "downloads") {
+      if (parsed.searchParams.get("resume") === "1") {
+        sessionStorage.setItem("nartya-resume-downloads", "1");
+        window.dispatchEvent(new Event("nartya-resume-downloads"));
+      }
+      navigationCallback?.("/downloads");
+    }
+  }).catch(() => {});
   void App.addListener("backButton", ({ canGoBack }) => {
     if (handleNativeBack()) return;
     if (document.fullscreenElement) { void document.exitFullscreen().catch(() => {}); return; }

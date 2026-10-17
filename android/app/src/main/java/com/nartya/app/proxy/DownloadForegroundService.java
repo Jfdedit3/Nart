@@ -1,6 +1,8 @@
 package com.nartya.app.proxy;
 
 import android.app.Notification;
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -45,8 +47,10 @@ public class DownloadForegroundService extends Service {
         if (activeCount <= 0) {
             context.stopService(new Intent(context, DownloadForegroundService.class));
             NotificationManager manager = context.getSystemService(NotificationManager.class);
-            manager.notify(NOTIFICATION_ID, buildNotification(context,
-                item.optString("animeTitle", "Téléchargements"), item.optString("error", "En pause"), 0, 0));
+            if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+                manager.notify(NOTIFICATION_ID, buildNotification(context,
+                    item.optString("animeTitle", "Téléchargements"), item.optString("error", "En pause"), 0, 0));
+            }
         } else {
             ContextCompat.startForegroundService(context, intent);
         }

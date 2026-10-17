@@ -92,6 +92,7 @@ Chaque plateforme a sa propre version et son propre journal des nouveautés :
 
 ## Distribution
 
-Android : APK hors Play Store, mise à jour proposée depuis l'app. iOS : IPA non signée,
+Android : APK hors Play Store, mise à jour proposée depuis l'app. Signature, App Links et
+workflow détaillés dans [ANDROID_DISTRIBUTION.md](ANDROID_DISTRIBUTION.md). iOS : IPA non signée,
 installée par SideStore ou AltStore, qui la signent avec l'Apple ID de l'utilisateur (sept
 jours de validité, trois apps au plus avec un compte gratuit).

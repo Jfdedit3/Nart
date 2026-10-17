@@ -1,6 +1,7 @@
 package com.nartya.app.proxy;
 
 import android.util.AtomicFile;
+import android.util.Base64;
 import android.util.Log;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -105,7 +106,11 @@ public class Downloads {
 
     public synchronized boolean resume(String id) {
         JSONObject payload = pendingPayloads.get(id);
-        return payload != null && start(payload);
+        try { return payload != null && start(payload); }
+        catch (IllegalStateException error) {
+            patch(id, "status", "paused", "error", error.getMessage());
+            return false;
+        }
     }
 
     public void resumeAll() {
@@ -218,8 +223,13 @@ public class Downloads {
 
     // API exposée au plugin
 
-    public List<JSONObject> list() {
-        return new ArrayList<>(index.values());
+    public synchronized List<JSONObject> list() {
+        List<JSONObject> snapshot = new ArrayList<>();
+        for (JSONObject item : index.values()) {
+            try { snapshot.add(new JSONObject(item.toString())); }
+            catch (Exception error) { Log.e("NartyaDownloads", "État de téléchargement invalide", error); }
+        }
+        return snapshot;
     }
 
     public int activeCount() {
@@ -556,11 +566,6 @@ public class Downloads {
     private long[] downloadMp4Parallel(String id, String url, SourceContext source, File dir, long total, AtomicBoolean cancel) throws Exception {
         File dest = new File(dir, "video.mp4");
         File tmp = new File(dir, "video.parallel.part");
-        if (policy != null) policy.check(total);
-        try (RandomAccessFile raf = new RandomAccessFile(tmp, "rw")) {
-            raf.setLength(0);
-            raf.setLength(total);
-        }
         int parts = Math.max(1, (int) Math.min(MP4_CONNECTIONS, (total + MP4_MIN_PARALLEL_BYTES - 1) / MP4_MIN_PARALLEL_BYTES));
         long chunk = (total + parts - 1) / parts;
         AtomicLong received = new AtomicLong(0);
@@ -572,6 +577,11 @@ public class Downloads {
         if (etag.isEmpty() || etag.startsWith("W/")) {
             tmp.delete();
             throw new IOException("Assemblage parallèle sans validateur fort");
+        }
+        if (policy != null) policy.check(total);
+        try (RandomAccessFile raf = new RandomAccessFile(tmp, "rw")) {
+            raf.setLength(0);
+            raf.setLength(total);
         }
         for (int i = 0; i < parts; i++) {
             final long start = i * chunk;
@@ -628,8 +638,8 @@ public class Downloads {
         }
 
         File fingerprintFile = new File(dir, "hls.fingerprint");
-        String identity = java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256")
-            .digest((pl.baseUrl + "\n" + pl.text).getBytes(StandardCharsets.UTF_8)));
+        String identity = Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-256")
+            .digest((pl.baseUrl + "\n" + pl.text).getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
         if (!identity.equals(DownloadFiles.readText(fingerprintFile))) {
             File[] fragments = dir.listFiles();
             if (fragments != null) for (File file : fragments) {
@@ -749,6 +759,7 @@ public class Downloads {
         if (!res.isSuccessful()) { res.close(); throw new Exception("HTTP " + res.code()); }
         Pl pl = new Pl();
         pl.text = res.body().string();
+        if (!pl.text.trim().startsWith("#EXTM3U")) { res.close(); throw new IOException("Playlist HLS invalide"); }
         String upstream = res.header("X-Upstream-Url");
         pl.baseUrl = upstream != null ? upstream : url;
         res.close();
@@ -894,7 +905,7 @@ public class Downloads {
         if (System.currentTimeMillis() - lastIndexSaveAt >= 2_000) saveIndex();
     }
 
-    private void patch(String id, Object... kv) {
+    private synchronized void patch(String id, Object... kv) {
         JSONObject it = index.get(id);
         if (it == null || (stopReasons.containsKey(id) && kv.length > 1 && "downloading".equals(kv[1]))) return;
         boolean progressUpdate = false;

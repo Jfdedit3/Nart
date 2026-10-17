@@ -24,7 +24,8 @@ import { useNetworkStore } from "@/stores/useNetworkStore";
 import { useDownloadsStore } from "@/stores/useDownloadsStore";
 import { toast } from "@/lib/toast";
 
-const FAILED_STATUSES = new Set(["error", "interrupted", "paused", "waiting_wifi", "pausing"]);
+const FAILED_STATUSES = new Set(["error", "interrupted"]);
+const PAUSED_STATUSES = new Set(["paused", "waiting_wifi", "pausing"]);
 const ACTIVE_STATUSES = new Set(["downloading", "queued", "resolving"]);
 const CONFIRM_TIMEOUT_MS = 4000;
 
@@ -67,7 +68,7 @@ function EpisodeThumb({ item, fallbackCover }) {
 
 function EpisodeRow({ it, cover, selecting, selected, onToggleSelect, onPlay, onRetry, onPause, onCancel, onRemove }) {
   const inProgress = ACTIVE_STATUSES.has(it.status);
-  const failed = FAILED_STATUSES.has(it.status);
+  const failed = FAILED_STATUSES.has(it.status) || PAUSED_STATUSES.has(it.status);
   const pct = Math.round(it.percent || 0);
   return (
     <div className="group flex items-center gap-3 px-4 py-2 transition-colors hover:bg-white/[0.04]">
@@ -155,7 +156,7 @@ function EpisodeRow({ it, cover, selecting, selected, onToggleSelect, onPlay, on
 
 function ScanRow({ it, selecting, selected, onToggleSelect, onPlay, onRetry, onPause, onCancel, onRemove }) {
   const inProgress = ACTIVE_STATUSES.has(it.status);
-  const failed = FAILED_STATUSES.has(it.status);
+  const failed = FAILED_STATUSES.has(it.status) || PAUSED_STATUSES.has(it.status);
   const pct = Math.round(it.percent || 0);
   return (
     <div className="group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-white/[0.04]">

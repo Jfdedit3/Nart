@@ -13,7 +13,7 @@ public final class DownloadPolicy {
     private final Context context;
     private final File root;
     private final SharedPreferences settings;
-    private long lastCheck;
+    private long lastCheck = -1000;
     private long cachedUsed;
     public static final class WifiRequired extends IOException {
         public WifiRequired() { super("Wi-Fi requis"); }
@@ -27,7 +27,7 @@ public final class DownloadPolicy {
     public long quotaBytes() { return settings.getLong("quotaBytes", 0); }
     public synchronized void configure(boolean wifiOnly, long quotaBytes) {
         settings.edit().putBoolean("wifiOnly", wifiOnly).putLong("quotaBytes", Math.max(0, quotaBytes)).apply();
-        lastCheck = 0;
+        lastCheck = -1000;
     }
     public boolean hasWifi() {
         ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
@@ -43,7 +43,7 @@ public final class DownloadPolicy {
         cachedUsed = size(root);
         lastCheck = now;
         if (root.getUsableSpace() < RESERVE_BYTES + additionalBytes) throw new IOException("Espace disque insuffisant (100 Mo de réserve)");
-        if (quotaBytes() > 0 && cachedUsed + additionalBytes >= quotaBytes()) throw new IOException("Quota de stockage atteint");
+        if (quotaBytes() > 0 && cachedUsed + additionalBytes > quotaBytes()) throw new IOException("Quota de stockage atteint");
     }
     public synchronized long usedBytes() { cachedUsed = size(root); return cachedUsed; }
     public long freeBytes() { return root.getUsableSpace(); }

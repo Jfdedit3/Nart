@@ -28,4 +28,27 @@ public class AndroidSmokeTest {
             });
         }
     }
+
+    @Test public void updaterRejectsTheInstalledVersionAndAnotherPackage() {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                Object updater = activity.getBridge().getPlugin("NartyaUpdater").getInstance();
+                assertNotNull(updater);
+                try {
+                    java.lang.reflect.Method validate = updater.getClass().getDeclaredMethod("validateCandidate", java.io.File.class);
+                    validate.setAccessible(true);
+                    java.io.File installed = new java.io.File(activity.getApplicationInfo().sourceDir);
+                    java.lang.reflect.InvocationTargetException versionError = assertThrows(
+                        java.lang.reflect.InvocationTargetException.class, () -> validate.invoke(updater, installed));
+                    assertTrue(versionError.getCause() instanceof SecurityException);
+                    assertTrue(versionError.getCause().getMessage().contains("récente"));
+                    java.io.File testPackage = new java.io.File(androidx.test.platform.app.InstrumentationRegistry
+                        .getInstrumentation().getContext().getApplicationInfo().sourceDir);
+                    java.lang.reflect.InvocationTargetException packageError = assertThrows(
+                        java.lang.reflect.InvocationTargetException.class, () -> validate.invoke(updater, testPackage));
+                    assertTrue(packageError.getCause() instanceof SecurityException);
+                } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+            });
+        }
+    }
 }
