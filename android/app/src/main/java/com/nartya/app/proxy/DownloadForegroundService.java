@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
+import android.net.Uri;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
@@ -30,7 +31,8 @@ public class DownloadForegroundService extends Service {
     private static final String EXTRA_ACTIVE = "active";
 
     public static void update(Context context, @Nullable JSONObject item, int activeCount) {
-        if (activeCount <= 0) {
+        boolean paused = item != null && ("paused".equals(item.optString("status")) || "waiting_wifi".equals(item.optString("status")));
+        if (activeCount <= 0 && !paused) {
             context.stopService(new Intent(context, DownloadForegroundService.class));
             return;
         }
@@ -40,7 +42,14 @@ public class DownloadForegroundService extends Service {
                 .putExtra(EXTRA_EPISODE, item != null ? item.optString("epTitle", "Téléchargement") : "Téléchargement")
                 .putExtra(EXTRA_PROGRESS, item != null ? item.optInt("percent", 0) : 0)
                 .putExtra(EXTRA_ACTIVE, activeCount);
-        ContextCompat.startForegroundService(context, intent);
+        if (activeCount <= 0) {
+            context.stopService(new Intent(context, DownloadForegroundService.class));
+            NotificationManager manager = context.getSystemService(NotificationManager.class);
+            manager.notify(NOTIFICATION_ID, buildNotification(context,
+                item.optString("animeTitle", "Téléchargements"), item.optString("error", "En pause"), 0, 0));
+        } else {
+            ContextCompat.startForegroundService(context, intent);
+        }
     }
 
     @Override
@@ -63,15 +72,17 @@ public class DownloadForegroundService extends Service {
         String episode = intent != null ? intent.getStringExtra(EXTRA_EPISODE) : null;
         int progress = intent != null ? intent.getIntExtra(EXTRA_PROGRESS, 0) : 0;
         int active = intent != null ? intent.getIntExtra(EXTRA_ACTIVE, 1) : 1;
-        startForeground(NOTIFICATION_ID, buildNotification(title, episode, progress, active));
+        startForeground(NOTIFICATION_ID, buildNotification(this, title, episode, progress, active));
         return START_NOT_STICKY;
     }
 
-    private Notification buildNotification(String title, String episode, int progress, int active) {
-        Intent open = new Intent(this, MainActivity.class)
+    private static Notification buildNotification(Context context, String title, String episode, int progress, int active) {
+        Intent open = new Intent(context, MainActivity.class)
+                .setAction(Intent.ACTION_VIEW)
+                .setData(Uri.parse(context.getString(com.nartya.app.R.string.app_url_scheme) + "://downloads" + (active == 0 ? "?resume=1" : "")))
                 .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent contentIntent = PendingIntent.getActivity(
-                this,
+                context,
                 0,
                 open,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -83,16 +94,32 @@ public class DownloadForegroundService extends Service {
                 ? "Préparation du téléchargement…"
                 : episode + (progress > 0 ? " · " + progress + "%" : "");
 
-        return new NotificationCompat.Builder(this, CHANNEL_ID)
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
                 .setContentTitle(notificationTitle)
                 .setContentText(notificationText)
                 .setContentIntent(contentIntent)
                 .setCategory(NotificationCompat.CATEGORY_PROGRESS)
                 .setOnlyAlertOnce(true)
-                .setOngoing(true)
-                .setProgress(100, Math.max(0, Math.min(100, progress)), progress <= 0)
-                .build();
+                .setOngoing(active > 0)
+                .setProgress(active > 0 ? 100 : 0, Math.max(0, Math.min(100, progress)), active > 0 && progress <= 0);
+        if (active > 0) {
+            PendingIntent pause = PendingIntent.getBroadcast(context, 1,
+                new Intent(context, DownloadActionReceiver.class).setAction("pause"),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            builder.addAction(android.R.drawable.ic_media_pause, "Pause", pause);
+        } else {
+            builder.addAction(android.R.drawable.ic_media_play, "Reprendre dans l’app", contentIntent);
+            builder.setAutoCancel(true);
+        }
+        return builder.build();
+    }
+
+    @Override
+    public void onTimeout(int startId, int fgsType) {
+        NartyaProxyPlugin.pauseTransfers("Limite Android atteinte — reprendre dans l’app");
+        stopForeground(STOP_FOREGROUND_REMOVE);
+        stopSelf();
     }
 
     @Nullable

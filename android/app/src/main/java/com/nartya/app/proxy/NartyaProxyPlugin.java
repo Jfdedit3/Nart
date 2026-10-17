@@ -2,6 +2,9 @@ package com.nartya.app.proxy;
 
 import android.Manifest;
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import com.nartya.app.storage.DownloadPolicy;
 import android.content.pm.PackageManager;
 import android.os.Build;
 
@@ -34,6 +37,8 @@ public class NartyaProxyPlugin extends Plugin {
 
     private static ProxyServer server;
     private static Downloads downloads;
+    private static DownloadPolicy policy;
+    private static ConnectivityManager.NetworkCallback networkCallback;
     private static JSObject currentConfigs = new JSObject();
     private static volatile NartyaProxyPlugin activePlugin;
     private static volatile Context appContext;
@@ -97,6 +102,19 @@ public class NartyaProxyPlugin extends Plugin {
         File root = new File(context.getFilesDir(), "downloads");
         ProxyServer.setDownloadsRoot(root);
         downloads = new Downloads(root, NartyaProxyPlugin::handleDownloadProgress);
+        policy = new DownloadPolicy(context, root);
+        downloads.setPolicy(policy);
+        ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override public void onCapabilitiesChanged(Network network, android.net.NetworkCapabilities caps) {
+                if (policy.wifiOnly() && !policy.hasWifi()) downloads.pauseAll("Wi-Fi requis");
+                else downloads.resumeWifi();
+            }
+            @Override public void onLost(Network network) {
+                if (policy.wifiOnly()) downloads.pauseAll("Wi-Fi requis");
+            }
+        };
+        manager.registerDefaultNetworkCallback(networkCallback);
     }
 
     private static synchronized void handleDownloadProgress(JSONObject item) {
@@ -119,12 +137,47 @@ public class NartyaProxyPlugin extends Plugin {
     @PluginMethod
     public void downloadStart(PluginCall call) {
         ensureDownloads();
-        boolean started = downloads.start(call.getData());
+        boolean started;
+        try { started = downloads.start(call.getData()); }
+        catch (IllegalStateException error) { call.reject(error.getMessage()); return; }
         if (!started) {
             call.resolve(new JSObject().put("success", false).put("error", "Téléchargement invalide ou déjà actif"));
             return;
         }
         call.resolve(new JSObject().put("success", true));
+    }
+
+    @PluginMethod
+    public void downloadPause(PluginCall call) {
+        ensureDownloads();
+        call.resolve(new JSObject().put("success", downloads.pause(call.getString("id"), "En pause")));
+    }
+
+    @PluginMethod
+    public void downloadStorage(PluginCall call) {
+        ensureDownloads();
+        getBridge().execute(() -> call.resolve(new JSObject()
+            .put("usedBytes", policy.usedBytes()).put("freeBytes", policy.freeBytes())
+            .put("wifiOnly", policy.wifiOnly()).put("quotaBytes", policy.quotaBytes())));
+    }
+
+    @PluginMethod
+    public void downloadConfigure(PluginCall call) {
+        ensureDownloads();
+        policy.configure(Boolean.TRUE.equals(call.getBoolean("wifiOnly", false)), call.getDouble("quotaBytes", 0.0).longValue());
+        if (policy.wifiOnly() && !policy.hasWifi()) downloads.pauseAll("Wi-Fi requis");
+        else downloads.resumeWifi();
+        call.resolve(new JSObject().put("success", true));
+    }
+
+    public static void pauseTransfers(String reason) {
+        if (downloads != null) { downloads.pauseAll(reason); downloads.checkpoint(); }
+    }
+
+    public static void resumeTransfers() {
+        if (downloads != null) {
+            try { downloads.resumeAll(); } catch (IllegalStateException ignored) { }
+        }
     }
 
     @PluginMethod

@@ -8,6 +8,7 @@ import { useDownloadsStore } from "@/stores/useDownloadsStore";
 import { Select } from "@/components/ui/Select";
 import { getDownloadsDir, chooseDownloadsDir, openDownloadsDir } from "@/api/downloads";
 import { downloadConcurrency } from "@/lib/premium";
+import AndroidDownloadSettings from "./AndroidDownloadSettings";
 import { Section, SettingRow } from "./SettingsLayout";
 
 const QUALITY_OPTIONS = [
@@ -160,6 +161,7 @@ export default function DownloadsSection({ number }) {
         />
       </SettingRow>
 
+      {platform.os === "android" && <AndroidDownloadSettings />}
       <DownloadDirRow />
     </Section>
   );

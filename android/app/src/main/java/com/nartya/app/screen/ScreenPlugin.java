@@ -22,7 +22,8 @@ public class ScreenPlugin extends Plugin {
                 mode = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE;
                 break;
             case "portrait":
-                mode = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+                mode = getContext().getResources().getConfiguration().smallestScreenWidthDp >= 600
+                    ? ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
                 break;
             case "player":
                 // Le lecteur suit le sens du téléphone, portrait compris.

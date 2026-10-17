@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ImageOff, Play, X } from "lucide-react";
 import { getSeasonEpisodes } from "@/api/animeApi";
@@ -32,6 +33,11 @@ export function EpisodeSelectorMobile({
   const [loading, setLoading] = useState(true);
   const currentCardRef = useRef(null);
 
+  useNativeBack(true, () => {
+    if (showSeasonList) setShowSeasonList(false);
+    else if (showLanguageList) setShowLanguageList(false);
+    else onClose?.();
+  });
   const viewSeason = seasons.find((season) => String(season.id) === String(viewSeasonId));
   const isCurrentSeason = String(viewSeasonId) === String(currentSeasonId);
 

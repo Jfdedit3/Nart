@@ -8,6 +8,7 @@ import {
   removeDownload as apiRemove,
   getLocalPlaybackUrl,
   downloadsAvailable,
+  pauseDownload,
 } from "@/api/downloads";
 import { getSeasonEpisodes } from "@/api/animeApi";
 import { resolveDownloadSource } from "@/utils/episodeDownload";
@@ -64,6 +65,16 @@ export const useDownloadsStore = create((set, get) => ({
           setTimeout(() => get().retry(merged, { automatic: true }), 0);
         }
       });
+      const resumeRequested = async () => {
+        if (!sessionStorage.getItem("nartya-resume-downloads")) return;
+        sessionStorage.removeItem("nartya-resume-downloads");
+        await get().refresh();
+        for (const item of get().items.filter((it) => ["paused", "waiting_wifi"].includes(it.status))) {
+          await get().retry(item);
+        }
+      };
+      window.addEventListener("nartya-resume-downloads", resumeRequested);
+      void resumeRequested();
       set({ _subscribed: true });
     }
   },
@@ -162,6 +173,12 @@ export const useDownloadsStore = create((set, get) => ({
     } finally {
       set({ _resuming: false });
     }
+  },
+
+  pause: async (id) => {
+    const result = await pauseDownload(id);
+    if (!result?.success) throw new Error("Le téléchargement ne peut plus être mis en pause");
+    await get().refresh();
   },
 
   cancel: async (id) => {

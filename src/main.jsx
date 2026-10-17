@@ -5,6 +5,7 @@ import { Slide, ToastContainer } from "react-toastify";
 import { useAchievementUnlockStore } from "./stores/useAchievementUnlockStore.js";
 import "react-toastify/dist/ReactToastify.css";
 import App from "./App.jsx";
+import AndroidUpdateProgress from "./components/AndroidUpdateProgress.jsx";
 import { platform } from "./platform/index.js";
 import { installGlobalErrorLogging } from "./api/clientLogs.js";
 import { useSettingsStore } from "./stores/useSettingsStore.js";
@@ -77,6 +78,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <HashRouter>
       <App />
+      <AndroidUpdateProgress />
       {/* La cérémonie de succès couvre toute l'app, lecteur compris. */}
       <AchievementUnlockHost />
       <AppIntro />

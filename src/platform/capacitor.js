@@ -1,10 +1,11 @@
+import { handleNativeBack } from "../lib/nativeBack";
 import { Capacitor, registerPlugin, SystemBars, SystemBarsStyle } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
 import { Device } from "@capacitor/device";
 import { Haptics, ImpactStyle } from "@capacitor/haptics";
 import { ensureRecipe, getRecipe, getSource } from "@/shared/sourceRecipe";
-import { SITE_URL, SITE_HOST } from "@/config/instance";
+import { SITE_URL, SITE_HOST, APP_SCHEME } from "@/config/instance";
 import {
   extractFromHtml,
   isExtractedVideoUrlConsistentWithEmbed,
@@ -232,6 +233,10 @@ function attachUrlListener() {
         resolvers.forEach((resolve) => resolve(result));
         return;
       }
+      if (parsed.hostname === "downloads" && parsed.searchParams.get("resume") === "1") {
+        sessionStorage.setItem("nartya-resume-downloads", "1");
+        window.dispatchEvent(new Event("nartya-resume-downloads"));
+      }
       const route = `/${parsed.hostname}${parsed.pathname === "/" ? "" : parsed.pathname}`;
       if (route !== "/") navigationCallback?.(route);
     } catch (_) {}
@@ -241,7 +246,9 @@ function attachUrlListener() {
 if (Capacitor.isNativePlatform()) {
   attachUrlListener();
   void App.addListener("backButton", ({ canGoBack }) => {
-    if (canGoBack || window.history.length > 1) window.history.back();
+    if (handleNativeBack()) return;
+    if (document.fullscreenElement) { void document.exitFullscreen().catch(() => {}); return; }
+    if (window.history.state?.idx > 0 || (canGoBack && window.history.state?.idx == null)) window.history.back();
     else void App.exitApp();
   });
 }
@@ -471,6 +478,9 @@ export const capacitorPlatform = {
           }),
         );
     },
+    pause: (id) => NartyaProxy.downloadPause({ id }),
+    storage: () => Capacitor.getPlatform() === "android" ? NartyaProxy.downloadStorage() : Promise.resolve(null),
+    configure: (options) => Capacitor.getPlatform() === "android" ? NartyaProxy.downloadConfigure(options) : Promise.resolve(null),
     cancel: (id) => NartyaProxy.downloadCancel({ id }),
     async cancelSeason(payload) {
       const { items = [] } = await this.list();
@@ -533,7 +543,7 @@ export const capacitorPlatform = {
   // Pas l'App Link HTTPS : certains constructeurs désactivent sa vérification pour un APK hors
   // Play Store, et le retour OAuth reste alors dans le navigateur.
   async getAuthRedirectUrl() {
-    return "nartya://auth-callback";
+    return `${APP_SCHEME}://auth-callback`;
   },
   /**
    * Le widget inline échoue dans la WebView : `captcha.html` s'ouvre dans un Custom Tab et
@@ -579,6 +589,16 @@ export const capacitorPlatform = {
     } catch {
       return null;
     }
+  },
+  cancelUpdate: () => NartyaUpdater.cancel(),
+  onUpdateProgress(callback) {
+    const handle = NartyaUpdater.addListener("progress", callback);
+    return () => void handle.then((listener) => listener.remove()).catch(() => {});
+  },
+  setMediaPlayback: (options) => NartyaPlayer.setPlayback(options).catch(() => {}),
+  onMediaControl(callback) {
+    const handle = NartyaPlayer.addListener("mediaControl", callback);
+    return () => void handle.then((listener) => listener.remove()).catch(() => {});
   },
   async installUpdate(options) {
     try {

@@ -224,6 +224,8 @@ public class ProxyServer extends NanoHTTPD {
             rb.header(e.getKey(), e.getValue());
         }
         if (range != null) rb.header("Range", range);
+        String ifRange = session.getHeaders().get("if-range");
+        if (ifRange != null) rb.header("If-Range", ifRange);
 
         Response.IStatus status;
         Response out;
@@ -265,6 +267,8 @@ public class ProxyServer extends NanoHTTPD {
         String contentRange = resp.header("Content-Range");
         if (contentRange != null) out.addHeader("Content-Range", contentRange);
         out.addHeader("Accept-Ranges", "bytes");
+        String etag = resp.header("ETag");
+        if (etag != null) out.addHeader("ETag", etag);
         out.addHeader("X-Upstream-Url", finalUrl);
         return cors(out);
     }
