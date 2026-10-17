@@ -32,6 +32,10 @@ public final class NartyaProxyProbeInstrumentation extends Instrumentation {
     public void onStart() {
         Bundle result = new Bundle();
         try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                getUiAutomation().executeShellCommand("pm grant " + getTargetContext().getPackageName()
+                    + " android.permission.POST_NOTIFICATIONS").close();
+            }
             Intent intent = new Intent(getTargetContext(), MainActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             Activity activity = startActivitySync(intent);
@@ -72,12 +76,30 @@ public final class NartyaProxyProbeInstrumentation extends Instrumentation {
                 throw new AssertionError("Réponse du bridge inattendue: " + response);
             }
 
+            evaluate(webView,
+                "window.__nartyaNativeControlsProbe='pending';" +
+                "(async()=>{try{" +
+                "const p=window.Capacitor.Plugins;" +
+                "const volume=await p.NartyaPlayer.getVolume();" +
+                "await p.NartyaPlayer.setPlayback({active:false,playing:false});" +
+                "await p.NartyaPlayer.setAutoPip({enabled:false});" +
+                "const cancel=await p.NartyaUpdater.cancel();" +
+                "window.__nartyaNativeControlsProbe=typeof volume.max==='number'&&cancel.cancelled===true?'OK':'invalid';" +
+                "}catch(e){window.__nartyaNativeControlsProbe='error:'+String(e)}})();");
+            String controls = null;
+            for (int attempt = 0; attempt < 20; attempt++) {
+                Thread.sleep(250);
+                controls = evaluate(webView, "window.__nartyaNativeControlsProbe");
+                if (controls != null && controls.contains("OK")) break;
+            }
+            if (controls == null || !controls.contains("OK")) throw new AssertionError("Contrôles natifs indisponibles: " + controls);
+
             if (downloadUrl != null && !downloadUrl.isEmpty()) {
                 probeDownload(webView, downloadUrl);
             }
 
             result.putString("probe", downloadUrl == null
-                    ? "NartyaProxy permission bridge OK"
+                    ? "NartyaProxy permission + player + updater bridge OK"
                     : "NartyaProxy permission + download OK");
             finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {

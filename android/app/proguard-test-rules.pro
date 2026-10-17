@@ -4,3 +4,5 @@
 
 # Instrumentation discovers JUnit tests through reflection, including in minified QA builds.
 -keep class com.nartya.app.AndroidSmokeTest { *; }
+
+-keep class com.nartya.app.proxy.NartyaProxyProbeInstrumentation { *; }

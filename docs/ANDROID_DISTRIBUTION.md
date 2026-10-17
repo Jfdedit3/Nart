@@ -21,7 +21,10 @@ temporaire et ne constituent pas un canal de mises à jour stable.
 En local, `android/keystore.properties` reste pris en charge. Une release sans signature est
 refusée sauf avec `-PnartyaAllowUnsignedRelease=true`, réservé à la compilation de contrôle.
 `-PnartyaQaRelease=true` signe la release minifiée avec la clé debug uniquement pour les tests
-instrumentés ; cette APK n'est jamais publiée comme release par le workflow.
+instrumentés ; cette APK n'est jamais publiée comme release par le workflow. Le debug utilise
+AndroidJUnitRunner ; la release minifiée utilise la sonde framework NartyaProxyProbeInstrumentation
+pour éviter les collisions entre le runtime Kotlin de l’outil de test et celui de l’application.
+Cette sonde lance l’activité et vérifie les ponts permissions, lecteur et mises à jour.
 
 Augmenter `android/version.json.versionCode` à chaque distribution. Le test d'installation
 sur émulateur construit deux APK debug avec la même clé et des codes croissants, puis installe
