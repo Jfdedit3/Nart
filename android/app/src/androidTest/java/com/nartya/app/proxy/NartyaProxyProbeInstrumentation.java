@@ -33,8 +33,8 @@ public final class NartyaProxyProbeInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         try {
             if (android.os.Build.VERSION.SDK_INT >= 33) {
-                getUiAutomation().executeShellCommand("pm grant " + getTargetContext().getPackageName()
-                    + " android.permission.POST_NOTIFICATIONS").close();
+                getUiAutomation().grantRuntimePermission(getTargetContext().getPackageName(),
+                    android.Manifest.permission.POST_NOTIFICATIONS);
             }
             Intent intent = new Intent(getTargetContext(), MainActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
