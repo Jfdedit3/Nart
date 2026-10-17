@@ -31,6 +31,14 @@ final class DownloadFiles {
         try (FileOutputStream output = new FileOutputStream(partial, true)) { output.getFD().sync(); }
         if (!partial.renameTo(destination)) throw new IOException("Impossible de finaliser le fichier téléchargé");
     }
+    static String identity(String value) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+            StringBuilder result = new StringBuilder();
+            for (byte part : digest) result.append(String.format(java.util.Locale.ROOT, "%02x", part & 0xff));
+            return result.toString();
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
     static String readText(File file) {
         try (FileInputStream input = new FileInputStream(file)) {
             if (file.length() > 4096) return "";

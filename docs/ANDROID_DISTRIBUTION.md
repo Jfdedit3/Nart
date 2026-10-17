@@ -86,7 +86,8 @@ obtient une source fraîche au retour. Les pauses volontaires restent en pause. 
 « Reprendre dans l'app » ouvre la bibliothèque et relance la résolution des sources.
 
 Le Wi-Fi uniquement exige un Wi-Fi validé et non limité. Les transferts suspendus pour cette
-raison reprennent lorsque cette connexion revient si le processus est encore actif. Un arrêt
+raison reprennent lorsque cette connexion revient et que l’application est visible ; les
+sources sont résolues à nouveau. Cela évite un démarrage de service interdit depuis l’arrière-plan. Un arrêt
 forcé Android ne permet pas de promettre une reprise automatique sans réouverture de l'app.
 Le timeout `dataSync` d'Android 15+ arrête proprement le service et conserve l'état.
 
@@ -95,7 +96,7 @@ Le quota inclut les fichiers partiels ; les vérifications sont espacées d'une 
 quota. Une réserve de 100 Mo protège le stockage du téléphone. Baisser le quota n'efface aucun
 fichier ; le nettoyage des épisodes terminés exige une confirmation et un compte connecté.
 
-Les MP4 ne reprennent un préfixe que si un ETag fort et les plages concordent. Sans validateur
+Les MP4 ne reprennent un préfixe que si l’URL source, un ETag fort et les plages concordent. Sans validateur
 fiable, ils redémarrent pour éviter d'assembler deux fichiers différents. Le mode parallèle
 utilise un fichier distinct et le supprime s'il échoue. Un changement de playlist HLS invalide
 les fragments précédents ; les clés et initialisations multiples sont conservées séparément.

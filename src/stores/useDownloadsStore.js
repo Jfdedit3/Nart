@@ -9,6 +9,7 @@ import {
   getLocalPlaybackUrl,
   downloadsAvailable,
   pauseDownload,
+  getDownloadStorage,
 } from "@/api/downloads";
 import { getSeasonEpisodes } from "@/api/animeApi";
 import { resolveDownloadSource } from "@/utils/episodeDownload";
@@ -74,6 +75,7 @@ export const useDownloadsStore = create((set, get) => ({
         }
       };
       window.addEventListener("nartya-resume-downloads", resumeRequested);
+      window.addEventListener("nartya-wifi-ready", () => void get().refresh().then(() => get().resumeInterrupted()).catch(() => {}));
       void resumeRequested();
       set({ _subscribed: true });
     }
@@ -165,10 +167,11 @@ export const useDownloadsStore = create((set, get) => ({
   /** Séquentielle, pour respecter le quota de résolution de l'API. */
   resumeInterrupted: async () => {
     if (get()._resuming) return;
-    const interrupted = get().items.filter((item) => item.status === "interrupted");
-    if (!interrupted.length) return;
     set({ _resuming: true });
     try {
+      const storage = await getDownloadStorage().catch(() => null);
+      if (storage?.wifiOnly && !storage.hasWifi) return;
+      const interrupted = get().items.filter((item) => item.status === "interrupted" || item.status === "waiting_wifi");
       for (const item of interrupted) await get().retry(item);
     } finally {
       set({ _resuming: false });

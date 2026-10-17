@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -48,6 +49,7 @@ const fallbackReport = {
 };
 
 export default function Anime4kWarningModal({ mode, sourceWidth, sourceHeight, onConfirm, onCancel }) {
+  useNativeBack(true, onCancel);
   // Remplacé dès que le diagnostic GPU répond.
   const [report, setReport] = useState(fallbackReport);
 

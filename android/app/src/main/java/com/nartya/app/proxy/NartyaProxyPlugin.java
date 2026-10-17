@@ -108,7 +108,7 @@ public class NartyaProxyPlugin extends Plugin {
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override public void onCapabilitiesChanged(Network network, android.net.NetworkCapabilities caps) {
                 if (policy.wifiOnly() && !policy.hasWifi()) downloads.pauseAll("Wi-Fi requis");
-                else downloads.resumeWifi();
+                else requestWifiResume();
             }
             @Override public void onLost(Network network) {
                 if (policy.wifiOnly()) downloads.pauseAll("Wi-Fi requis");
@@ -158,7 +158,7 @@ public class NartyaProxyPlugin extends Plugin {
         ensureDownloads();
         getBridge().execute(() -> call.resolve(new JSObject()
             .put("usedBytes", policy.usedBytes()).put("freeBytes", policy.freeBytes())
-            .put("wifiOnly", policy.wifiOnly()).put("quotaBytes", policy.quotaBytes())));
+            .put("wifiOnly", policy.wifiOnly()).put("hasWifi", policy.hasWifi()).put("quotaBytes", policy.quotaBytes())));
     }
 
     @PluginMethod
@@ -166,7 +166,7 @@ public class NartyaProxyPlugin extends Plugin {
         ensureDownloads();
         policy.configure(Boolean.TRUE.equals(call.getBoolean("wifiOnly", false)), call.getDouble("quotaBytes", 0.0).longValue());
         if (policy.wifiOnly() && !policy.hasWifi()) downloads.pauseAll("Wi-Fi requis");
-        else downloads.resumeWifi();
+        else requestWifiResume();
         call.resolve(new JSObject().put("success", true));
     }
 
@@ -174,11 +174,21 @@ public class NartyaProxyPlugin extends Plugin {
         if (downloads != null) { downloads.pauseAll(reason); downloads.checkpoint(); }
     }
 
-    public static void resumeTransfers() {
-        if (downloads != null) {
-            try { downloads.resumeAll(); } catch (IllegalStateException ignored) { }
+    private static void requestWifiResume() {
+        NartyaProxyPlugin plugin = activePlugin;
+        if (downloads == null || policy == null || plugin == null || plugin.getActivity() == null) return;
+        if (policy.wifiOnly() && !policy.hasWifi()) return;
+        // Android 12+ disallows starting a foreground service from a plain network callback
+        // while the app is in the background. Re-resolve fresh sources when visible.
+        if (plugin.getActivity() instanceof androidx.lifecycle.LifecycleOwner
+            && ((androidx.lifecycle.LifecycleOwner) plugin.getActivity()).getLifecycle().getCurrentState()
+                .isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+            plugin.notifyListeners("downloadResumeNeeded", new JSObject());
         }
     }
+
+    @Override
+    protected void handleOnResume() { requestWifiResume(); }
 
     @PluginMethod
     public void downloadCancel(PluginCall call) {

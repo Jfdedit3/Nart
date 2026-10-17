@@ -52,7 +52,6 @@ public class Downloads {
     private final File root;
     private final OkHttpClient client;
     private final Listener listener;
-    private final Map<String, JSONObject> pendingPayloads = new ConcurrentHashMap<>();
     private final Map<String, String> stopReasons = new ConcurrentHashMap<>();
     private final java.util.Set<String> removals = ConcurrentHashMap.newKeySet();
     private volatile DownloadPolicy policy;
@@ -104,27 +103,6 @@ public class Downloads {
         for (String id : cancelFlags.keySet()) pause(id, reason);
     }
 
-    public synchronized boolean resume(String id) {
-        JSONObject payload = pendingPayloads.get(id);
-        try { return payload != null && start(payload); }
-        catch (IllegalStateException error) {
-            patch(id, "status", "paused", "error", error.getMessage());
-            return false;
-        }
-    }
-
-    public void resumeAll() {
-        for (JSONObject item : list()) {
-            if ("paused".equals(item.optString("status"))) resume(item.optString("id"));
-        }
-    }
-
-    public void resumeWifi() {
-        for (JSONObject item : list()) {
-            if ("waiting_wifi".equals(item.optString("status"))) resume(item.optString("id"));
-        }
-    }
-
     public void checkpoint() { saveIndex(); }
 
     public void shutdown() {
@@ -152,12 +130,9 @@ public class Downloads {
         calls.remove(cancel);
         if (removals.remove(id)) {
             deleteDir(ProxyServer.itemDir(id));
-            pendingPayloads.remove(id);
         } else if (stopReasons.containsKey(id)) {
             String reason = stopReasons.remove(id);
             patch(id, "status", "Wi-Fi requis".equals(reason) ? "waiting_wifi" : "paused", "error", reason);
-        } else {
-            pendingPayloads.remove(id);
         }
     }
     private volatile int proxyPort = 0;
@@ -293,7 +268,6 @@ public class Downloads {
         index.put(id, item);
         AtomicBoolean cancel = new AtomicBoolean(false);
         cancelFlags.put(id, cancel);
-        pendingPayloads.put(id, payload);
         saveIndex();
         emit(item);
         final String coverUrl = payload.optString("animeCover", "");
@@ -324,7 +298,6 @@ public class Downloads {
             cancelCalls(flag);
         } else {
             deleteDir(ProxyServer.itemDir(id));
-            pendingPayloads.remove(id);
         }
         index.remove(id);
         saveIndex();
@@ -520,7 +493,9 @@ public class Downloads {
         File tmp = new File(dir, "video.sequential.part");
         File validatorFile = new File(dir, "video.validator");
         String validator = DownloadFiles.readText(validatorFile);
-        long received = validator.isEmpty() ? 0 : tmp.length();
+        File sourceFile = new File(dir, "video.source");
+        String sourceIdentity = DownloadFiles.identity(url);
+        long received = validator.isEmpty() || !sourceIdentity.equals(DownloadFiles.readText(sourceFile)) ? 0 : tmp.length();
         Response res = received > 0
                 ? fetch(url, source, false, "bytes=" + received + "-", validator)
                 : fetch(url, source, false, null);
@@ -536,6 +511,9 @@ public class Downloads {
             int code = res.code(); res.close(); throw new IOException("Réponse vidéo invalide : HTTP " + code);
         }
         String etag = res.header("ETag", "");
+        // Invalidate the old validator before changing the source metadata.
+        DownloadFiles.writeText(validatorFile, "");
+        DownloadFiles.writeText(sourceFile, sourceIdentity);
         DownloadFiles.writeText(validatorFile, etag.startsWith("W/") ? "" : etag);
         long total = resuming ? totalFromContentRange(res.header("Content-Range"), received, res.body().contentLength())
                 : res.body().contentLength();
@@ -560,6 +538,7 @@ public class Downloads {
         checkTransfer(cancel);
         DownloadFiles.commit(tmp, dest);
         validatorFile.delete();
+        sourceFile.delete();
         return new long[]{received};
     }
 

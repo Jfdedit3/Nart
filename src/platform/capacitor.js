@@ -204,6 +204,11 @@ function rememberDownloadTarget(target) {
 
 let authCallback = null;
 let navigationCallback = null;
+let pendingNavigation = null;
+function publishNavigation(route) {
+  if (navigationCallback) navigationCallback(route);
+  else pendingNavigation = route;
+}
 let urlListenerAttached = false;
 let captchaResolvers = [];
 
@@ -238,13 +243,16 @@ function attachUrlListener() {
         window.dispatchEvent(new Event("nartya-resume-downloads"));
       }
       const route = `/${parsed.hostname}${parsed.pathname === "/" ? "" : parsed.pathname}`;
-      if (route !== "/") navigationCallback?.(route);
+      if (route !== "/") publishNavigation(route);
     } catch (_) {}
   });
 }
 
 if (Capacitor.isNativePlatform()) {
   attachUrlListener();
+  if (Capacitor.getPlatform() === "android") {
+    void NartyaProxy.addListener("downloadResumeNeeded", () => window.dispatchEvent(new Event("nartya-wifi-ready")));
+  }
   void App.getLaunchUrl().then(({ url } = {}) => {
     if (!url) return;
     const parsed = new URL(url);
@@ -253,7 +261,7 @@ if (Capacitor.isNativePlatform()) {
         sessionStorage.setItem("nartya-resume-downloads", "1");
         window.dispatchEvent(new Event("nartya-resume-downloads"));
       }
-      navigationCallback?.("/downloads");
+      publishNavigation("/downloads");
     }
   }).catch(() => {});
   void App.addListener("backButton", ({ canGoBack }) => {
@@ -590,6 +598,11 @@ export const capacitorPlatform = {
   onNavigate(callback) {
     navigationCallback = typeof callback === "function" ? callback : null;
     attachUrlListener();
+    if (navigationCallback && pendingNavigation) {
+      const route = pendingNavigation;
+      pendingNavigation = null;
+      navigationCallback(route);
+    }
     return () => {
       if (navigationCallback === callback) navigationCallback = null;
     };

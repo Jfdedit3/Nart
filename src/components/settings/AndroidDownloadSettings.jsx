@@ -68,7 +68,7 @@ export default function AndroidDownloadSettings() {
   return (
     <>
       <SettingRow icon={Wifi} label="Wi-Fi uniquement"
-        description="Met les transferts en pause hors Wi-Fi non limité. Ils reprennent lorsque la connexion revient, tant que le processus reste actif.">
+        description="Met les transferts en pause hors Wi-Fi non limité. Ils reprennent lorsque le Wi-Fi revient et que l’application est visible.">
         <Toggle label="Télécharger uniquement en Wi-Fi" checked={info.wifiOnly}
           onChange={(wifiOnly) => { if (!busy) void configure({ wifiOnly }); }} />
       </SettingRow>

@@ -72,6 +72,7 @@ public class DownloadsIntegrationTest {
         File dir = ProxyServer.itemDir("etag"); assertTrue(dir.mkdirs());
         Files.write(new File(dir, "video.sequential.part").toPath(), new byte[]{99, 99, 99});
         DownloadFiles.writeText(new File(dir, "video.validator"), "\"old\"");
+        DownloadFiles.writeText(new File(dir, "video.source"), DownloadFiles.identity("https://media.example/video.mp4"));
         server.setDispatcher(new Dispatcher() {
             @Override public MockResponse dispatch(RecordedRequest request) {
                 if (request.getHeader("Range") != null) return new MockResponse().setResponseCode(206)
@@ -83,6 +84,23 @@ public class DownloadsIntegrationTest {
         assertTrue(downloads.start(payload("etag"))); awaitSuccess();
         assertArrayEquals(video, Files.readAllBytes(new File(dir, "video.mp4").toPath()));
     }
+    @Test public void changingHlsSourcesNeverReusesTheOldFragments() throws Exception {
+        File dir = ProxyServer.itemDir("hls"); assertTrue(dir.mkdirs());
+        Files.write(new File(dir, "seg00000.ts").toPath(), new byte[]{99});
+        DownloadFiles.writeText(new File(dir, "hls.fingerprint"), "old-source");
+        server.setDispatcher(new Dispatcher() {
+            @Override public MockResponse dispatch(RecordedRequest request) {
+                String target = request.getRequestUrl().queryParameter("url");
+                if (target != null && target.endsWith(".m3u8")) return new MockResponse().setBody("#EXTM3U\n#EXTINF:10,\nsegment.ts\n#EXT-X-ENDLIST\n");
+                return new MockResponse().setBody("new-segment");
+            }
+        });
+        assertTrue(downloads.start(payload("hls").put("directUrl", "https://media.example/master.m3u8")));
+        awaitSuccess();
+        assertEquals("new-segment", DownloadFiles.readText(new File(dir, "seg00000.ts")));
+        assertEquals("playlist.m3u8", result.get().optString("file"));
+    }
+
     @Test public void scanWorkersDownloadAllPagesNotOnlyTheFirstSix() throws Exception {
         server.setDispatcher(new Dispatcher() {
             @Override public MockResponse dispatch(RecordedRequest request) { return new MockResponse().setBody("image"); }

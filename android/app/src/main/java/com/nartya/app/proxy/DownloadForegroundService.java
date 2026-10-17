@@ -26,6 +26,7 @@ public class DownloadForegroundService extends Service {
 
     private static final String CHANNEL_ID = "nartya_downloads";
     private static final int NOTIFICATION_ID = 4201;
+    private static final int PAUSED_NOTIFICATION_ID = 4202;
     private static final String ACTION_UPDATE = "com.nartya.app.download.UPDATE";
     private static final String EXTRA_TITLE = "title";
     private static final String EXTRA_EPISODE = "episode";
@@ -48,10 +49,11 @@ public class DownloadForegroundService extends Service {
             context.stopService(new Intent(context, DownloadForegroundService.class));
             NotificationManager manager = context.getSystemService(NotificationManager.class);
             if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
-                manager.notify(NOTIFICATION_ID, buildNotification(context,
+                manager.notify(PAUSED_NOTIFICATION_ID, buildNotification(context,
                     item.optString("animeTitle", "Téléchargements"), item.optString("error", "En pause"), 0, 0));
             }
         } else {
+            context.getSystemService(NotificationManager.class).cancel(PAUSED_NOTIFICATION_ID);
             ContextCompat.startForegroundService(context, intent);
         }
     }

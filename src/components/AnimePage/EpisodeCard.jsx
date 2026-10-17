@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { memo, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -105,6 +106,7 @@ function EpisodeActionsSheet({
   onRemove,
   onClose,
 }) {
+  useNativeBack(open, onClose);
   if (!open || typeof document === "undefined") return null;
 
   const num = episode.episode || episode.number;
