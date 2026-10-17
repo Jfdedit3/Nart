@@ -4,7 +4,8 @@
  * Un fork modifie ce fichier pour pointer vers sa propre instance ; Supabase se règle dans
  * `.env`.
  */
-export const SITE_URL = "https://nartya.app";
+export const SITE_URL = import.meta.env?.VITE_SITE_URL || "https://nartya.app";
+export const APP_SCHEME = import.meta.env?.VITE_APP_SCHEME || "nartya";
 export const SITE_HOST = new URL(SITE_URL).host;
 export const API_URL = "https://anime.nartya.app";
 export const DISCORD_INVITE = "https://discord.gg/q5MHWyBXNm";

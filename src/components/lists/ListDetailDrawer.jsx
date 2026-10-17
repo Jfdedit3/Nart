@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -49,6 +50,7 @@ export default function ListDetailDrawer({ row, onClose, onStatusChange, onDates
   const [completedInput, setCompletedInput] = useState(() => toDateInputValue(row.completed_at));
   const [savingDates, setSavingDates] = useState(false);
 
+  useNativeBack(true, onClose);
   const slug = row.anime_slug;
 
   useEffect(() => {

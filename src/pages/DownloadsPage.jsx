@@ -4,6 +4,7 @@ import {
   Download,
   Trash2,
   Play,
+  Pause,
   Loader2,
   X,
   HardDrive,
@@ -18,12 +19,13 @@ import {
   BookOpen,
 } from "lucide-react";
 import PageLoader from "@/components/ui/PageLoader";
-import { downloadsAvailable } from "@/api/downloads";
+import { downloadsAvailable, canPauseDownloads } from "@/api/downloads";
 import { useNetworkStore } from "@/stores/useNetworkStore";
 import { useDownloadsStore } from "@/stores/useDownloadsStore";
 import { toast } from "@/lib/toast";
 
 const FAILED_STATUSES = new Set(["error", "interrupted"]);
+const PAUSED_STATUSES = new Set(["paused", "waiting_wifi", "pausing"]);
 const ACTIVE_STATUSES = new Set(["downloading", "queued", "resolving"]);
 const CONFIRM_TIMEOUT_MS = 4000;
 
@@ -64,9 +66,9 @@ function EpisodeThumb({ item, fallbackCover }) {
   );
 }
 
-function EpisodeRow({ it, cover, selecting, selected, onToggleSelect, onPlay, onRetry, onCancel, onRemove }) {
+function EpisodeRow({ it, cover, selecting, selected, onToggleSelect, onPlay, onRetry, onPause, onCancel, onRemove }) {
   const inProgress = ACTIVE_STATUSES.has(it.status);
-  const failed = FAILED_STATUSES.has(it.status);
+  const failed = FAILED_STATUSES.has(it.status) || PAUSED_STATUSES.has(it.status);
   const pct = Math.round(it.percent || 0);
   return (
     <div className="group flex items-center gap-3 px-4 py-2 transition-colors hover:bg-white/[0.04]">
@@ -126,7 +128,13 @@ function EpisodeRow({ it, cover, selecting, selected, onToggleSelect, onPlay, on
         </div>
       </button>
 
-      {failed && (
+      {inProgress && it.status !== "resolving" && canPauseDownloads() && (
+        <button onClick={() => onPause(it.id)} aria-label="Mettre en pause" title="Pause"
+          className="shrink-0 rounded p-3 text-muted hover:text-primary">
+          <Pause size={16} />
+        </button>
+      )}
+      {failed && it.status !== "pausing" && (
         <button
           onClick={() => onRetry(it)}
           title="Reprendre"
@@ -146,9 +154,9 @@ function EpisodeRow({ it, cover, selecting, selected, onToggleSelect, onPlay, on
   );
 }
 
-function ScanRow({ it, selecting, selected, onToggleSelect, onPlay, onRetry, onCancel, onRemove }) {
+function ScanRow({ it, selecting, selected, onToggleSelect, onPlay, onRetry, onPause, onCancel, onRemove }) {
   const inProgress = ACTIVE_STATUSES.has(it.status);
-  const failed = FAILED_STATUSES.has(it.status);
+  const failed = FAILED_STATUSES.has(it.status) || PAUSED_STATUSES.has(it.status);
   const pct = Math.round(it.percent || 0);
   return (
     <div className="group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-white/[0.04]">
@@ -194,7 +202,13 @@ function ScanRow({ it, selecting, selected, onToggleSelect, onPlay, onRetry, onC
         </span>
       </button>
 
-      {failed && (
+      {inProgress && it.status !== "resolving" && canPauseDownloads() && (
+        <button onClick={() => onPause(it.id)} aria-label="Mettre en pause" title="Pause"
+          className="shrink-0 rounded p-3 text-muted hover:text-primary">
+          <Pause size={16} />
+        </button>
+      )}
+      {failed && it.status !== "pausing" && (
         <button
           onClick={() => onRetry(it)}
           title="Reprendre"
@@ -224,6 +238,10 @@ export default function DownloadsPage() {
   const remove = useDownloadsStore((s) => s.remove);
   const removeMany = useDownloadsStore((s) => s.removeMany);
   const retry = useDownloadsStore((s) => s.retry);
+  const pause = useDownloadsStore((s) => s.pause);
+  const handlePause = async (id) => {
+    try { await pause(id); } catch (error) { toast.error(error.message); }
+  };
   const loading = !loaded;
 
   // Persisté en localStorage.
@@ -328,7 +346,7 @@ export default function DownloadsPage() {
       if (it.type !== "scan") g.allScan = false;
       // « Téléchargé » = terminé.
       if (["downloading", "queued", "resolving"].includes(it.status)) g.downloading += 1;
-      else if (it.status !== "error" && it.status !== "interrupted") g.done += 1;
+      else if (it.status === "done") g.done += 1;
     }
     for (const g of map.values()) {
       g.episodes.sort((a, b) => {
@@ -573,6 +591,7 @@ export default function DownloadsPage() {
                             onToggleSelect={toggleSelectItem}
                             onPlay={playOffline}
                             onRetry={retry}
+                            onPause={handlePause}
                             onCancel={cancel}
                             onRemove={remove}
                           />
@@ -589,6 +608,7 @@ export default function DownloadsPage() {
                             onToggleSelect={toggleSelectItem}
                             onPlay={playOffline}
                             onRetry={retry}
+                            onPause={handlePause}
                             onCancel={cancel}
                             onRemove={remove}
                           />

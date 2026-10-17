@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Loader2, Search, X } from "lucide-react";
@@ -7,6 +8,7 @@ const OVERSCAN = 6;
 
 /** Les chapitres restants sont cochés par défaut. `statusOf(chapter)` renvoie le statut existant. */
 export function ChapterDownloadSheet({ open, chapters = [], statusOf, onClose, onConfirm }) {
+  useNativeBack(open, onClose);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [scrollTop, setScrollTop] = useState(0);

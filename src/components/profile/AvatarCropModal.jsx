@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Check, Loader2, ZoomIn, Move } from "lucide-react";
@@ -7,6 +8,7 @@ const OUT = 512; // côté de l'image exportée (px)
 
 /** Recadrage local (canvas), exporté en carré JPEG. Un gif est envoyé tel quel. */
 export default function AvatarCropModal({ file, onCancel, onConfirm }) {
+  useNativeBack(true, onCancel);
   const [url, setUrl] = useState(null);
   const [nat, setNat] = useState(null);
   const [zoom, setZoom] = useState(1);

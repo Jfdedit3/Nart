@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { CONTACT_EMAIL } from "@/config/instance";
@@ -45,6 +46,7 @@ const SECTIONS = [
 ];
 
 export default function TermsDialog({ open, onOpenChange }) {
+  useNativeBack(open, () => onOpenChange(false));
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>

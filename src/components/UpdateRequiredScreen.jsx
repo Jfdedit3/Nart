@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { openHub } from "@/lib/hubAuth";
 import { installAppUpdate } from "@/lib/installAppUpdate";
+import { toast } from "@/lib/toast";
 import { platform } from "@/platform";
 import BlockScreen from "@/components/BlockScreen";
 
@@ -19,7 +20,8 @@ export default function UpdateRequiredScreen({ latest, message, downloadUrl, sha
     setBusy(true);
     try {
       if (isAndroid || isIos) {
-        await installAppUpdate({ downloadUrl, sha256 });
+        const result = await installAppUpdate({ downloadUrl, sha256 });
+        if (result?.permissionRequired) toast.info("Autorise l’installation d’APK, puis relance la mise à jour.");
         return;
       }
       const info = await window.electronAPI?.hub?.getInfo?.().catch(() => null);
@@ -27,6 +29,8 @@ export default function UpdateRequiredScreen({ latest, message, downloadUrl, sha
       if (!res?.success && downloadUrl) {
         window.electronAPI?.openExternal?.(downloadUrl);
       }
+    } catch (error) {
+      toast.error(error.message || "Mise à jour impossible");
     } finally {
       setBusy(false);
     }
@@ -44,7 +48,7 @@ export default function UpdateRequiredScreen({ latest, message, downloadUrl, sha
           {busy ? (
             <>
               <Loader2 size={16} className="animate-spin" />
-              {isIos ? "Ouverture…" : "Ouverture du Hub…"}
+              {isAndroid ? "Préparation de la mise à jour…" : isIos ? "Ouverture…" : "Ouverture du Hub…"}
             </>
           ) : (
             isAndroid ? "Télécharger la mise à jour" : isIos ? "Voir la mise à jour" : "Mettre à jour"
@@ -59,7 +63,7 @@ export default function UpdateRequiredScreen({ latest, message, downloadUrl, sha
             </>
           )}
           {isAndroid
-            ? "Le téléchargement s'ouvre dans ton navigateur. Android te demandera ensuite de confirmer l'installation de l'APK."
+            ? "L’application télécharge et vérifie l’APK. Android te demandera ensuite de confirmer son installation."
             : isIos
               ? "Ouvre SideStore et installe la nouvelle version depuis l'onglet Mises à jour."
               : "La mise à jour s'installe depuis Nartya Hub. S'il n'est pas encore installé, le bouton t'amène à la page de téléchargement."}

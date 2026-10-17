@@ -5,16 +5,22 @@ apply plugin: 'com.android.application'
 // Keystore local, jamais commité. Absent, l'APK release reste non signé.
 def keystorePropsFile = rootProject.file('keystore.properties')
 def keystoreProps = new Properties()
-def hasReleaseSigning = keystorePropsFile.exists()
+def hasReleaseSigning = keystorePropsFile.exists() || System.getenv('NART_KEYSTORE_PATH') != null
 if (hasReleaseSigning) {
-    keystoreProps.load(new FileInputStream(keystorePropsFile))
+    if (keystorePropsFile.exists()) keystoreProps.load(new FileInputStream(keystorePropsFile))
+    else {
+        keystoreProps['storeFile'] = System.getenv('NART_KEYSTORE_PATH')
+        keystoreProps['storePassword'] = System.getenv('NART_STORE_PASSWORD')
+        keystoreProps['keyAlias'] = System.getenv('NART_KEY_ALIAS')
+        keystoreProps['keyPassword'] = System.getenv('NART_KEY_PASSWORD')
+    }
 }
 
 // Indépendante du desktop. Le versionCode reste strictement croissant, même si le versionName
 // repart à 1.0.0 ; 12800 succède aux premières APK de validation.
 def androidVersionMetadata = new JsonSlurper().parse(rootProject.file('version.json'))
 def androidVersionName = androidVersionMetadata.versionName as String
-def androidVersionCode = androidVersionMetadata.versionCode as Integer
+def androidVersionCode = (project.findProperty('nartyaVersionCode') ?: androidVersionMetadata.versionCode) as Integer
 def nartyaProxyProbe = project.findProperty('nartyaProxyProbe') == 'true'
 if (!(androidVersionName ==~ /\d+\.\d+\.\d+/)) {
     throw new GradleException("versionName Android invalide dans android/version.json: ${androidVersionName}")
@@ -26,8 +32,13 @@ if (androidVersionCode < 12800 || androidVersionCode > 2100000000) {
 android {
     namespace = "com.nartya.app"
     compileSdk = rootProject.ext.compileSdkVersion
+    testOptions { unitTests.includeAndroidResources = true }
+    testBuildType project.hasProperty('nartyaQaRelease') ? 'release' : 'debug'
     defaultConfig {
-        applicationId "com.nartya.app"
+        applicationId System.getenv('NART_ANDROID_APPLICATION_ID') ?: "com.nartya.app"
+        resValue "string", "app_display_name", System.getenv('NART_ANDROID_APP_NAME') ?: "Nartya"
+        resValue "string", "app_url_scheme", System.getenv('NART_ANDROID_URL_SCHEME') ?: "nartya"
+        manifestPlaceholders = [appLinkHost: System.getenv('NART_ANDROID_APP_LINK_HOST') ?: "nartya.app"]
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode androidVersionCode
@@ -55,8 +66,11 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            testProguardFiles 'proguard-test-rules.pro'
             if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
+            } else if (project.hasProperty('nartyaQaRelease')) {
+                signingConfig signingConfigs.debug
             }
         }
     }
@@ -77,6 +91,8 @@ dependencies {
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     testImplementation "junit:junit:$junitVersion"
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
@@ -91,4 +107,12 @@ try {
     }
 } catch(Exception e) {
     logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
+
+// Validation CI may compile an unsigned release; distribution must always use the same key.
+gradle.taskGraph.whenReady { graph ->
+    def distributing = graph.allTasks.any { it.name in ['assembleRelease', 'bundleRelease'] }
+    if (distributing && !hasReleaseSigning && !project.hasProperty('nartyaAllowUnsignedRelease') && !project.hasProperty('nartyaQaRelease')) {
+        throw new GradleException('Release signing missing: configure NART_KEYSTORE_PATH and signing credentials (see docs/ANDROID_DISTRIBUTION.md)')
+    }
 }

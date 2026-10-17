@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { LogOut, X, Loader2, AlertTriangle } from "lucide-react";
@@ -51,6 +52,8 @@ export default function SignOutModal({ onClose }) {
     // Laisse le fichier de session être écrit et le hub démarrer.
     setTimeout(() => quitApp(), 600);
   };
+
+  useNativeBack(true, () => { if (!busy) onClose(); });
 
   return createPortal(
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">

@@ -1,3 +1,4 @@
+import { registerNativeBack } from "../lib/nativeBack";
 import { platform } from "@/platform";
 
 let wakeLock = null;
@@ -509,6 +510,31 @@ export function setupPictureInPicture(art) {
     disposers.push(() => target.removeEventListener(event, handler));
   };
 
+  disposers.push(registerNativeBack(() => {
+    if (art.setting?.show) { art.setting.show = false; return true; }
+    if (art.fullscreen) { art.fullscreen = false; return true; }
+    return false;
+  }, 10));
+  if (platform.onMediaControl) {
+    disposers.push(platform.onMediaControl(({ action, position }) => {
+      if (action === "play") void art.play()?.catch?.(() => {});
+      else if (action === "pause") art.pause();
+      else if (action === "seek") art.seek = Math.max(0, Math.min(art.duration || 0, position / 1000));
+      else if (action === "rewind" || action === "forward") art.seek = Math.max(0, Math.min(art.duration || 0, art.currentTime + (action === "rewind" ? -10 : 10)));
+    }));
+    let lastSync = 0;
+    const syncMedia = (event) => {
+      if (event?.type === "timeupdate" && Date.now() - lastSync < 1000) return;
+      lastSync = Date.now();
+      void platform.setMediaPlayback({ active: true, playing: !video.paused && !video.ended,
+        position: Math.round((video.currentTime || 0) * 1000),
+        duration: Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : 0,
+        title: art.option?.title || "Nartya" });
+    };
+    for (const event of ["playing", "pause", "ended", "loadedmetadata", "timeupdate"]) listen(video, event, syncMedia);
+    syncMedia();
+    disposers.push(() => void platform.setMediaPlayback({ active: false, playing: false }));
+  }
   const pip = platform.nativePip;
   if (pip) {
     const sync = () =>

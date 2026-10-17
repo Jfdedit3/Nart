@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Search, X } from "lucide-react";
@@ -6,6 +7,7 @@ const ROW_HEIGHT = 50;
 const OVERSCAN = 6;
 
 export function MobileChapterSheet({ open, chapters = [], value, onChange, onClose }) {
+  useNativeBack(open, onClose);
   const [search, setSearch] = useState("");
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(420);

@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Loader2, ImagePlus, Trash2, Check } from "lucide-react";
@@ -248,6 +249,8 @@ export default function ProfileEditModal({ onClose }) {
   };
 
   const busy = saving || !!uploading;
+
+  useNativeBack(true, () => { if (!busy) onClose(); });
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-end sm:items-center sm:justify-center sm:p-4">

@@ -137,9 +137,9 @@ export default function App() {
     void resumeInterruptedDownloads();
   }, [checked, online, downloadsLoaded, sessionUserId, resumeInterruptedDownloads]);
 
-  // iOS fige les téléchargements quand l'app quitte l'écran.
+  // Au retour, renouveler les sources interrompues ou en attente de Wi-Fi.
   useEffect(() => {
-    if (platform.os !== "ios" || !checked || !online || !downloadsLoaded || !sessionUserId) return undefined;
+    if (!platform.isMobile || !checked || !online || !downloadsLoaded || !sessionUserId) return undefined;
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
       void useDownloadsStore

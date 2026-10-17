@@ -18,7 +18,7 @@
     "electron:dev:public": "concurrently -k -n vite,electron -c cyan,yellow \"vite\" \"wait-on -t 60000 http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
     "electron:start": "cross-env NODE_ENV=development electron .",
     "lint": "eslint .",
-    "test:unit": "node --test test/audio-track.test.mjs test/proxy-range.test.mjs test/video-providers.test.mjs test/stream-anonymization.test.mjs test/version-gate.test.mjs test/hls-detection.test.mjs test/quality-levels.test.mjs test/download-recovery.test.mjs test/session-guards.test.mjs test/changelog.test.mjs test/android-release-manifest.test.mjs test/ios-release-manifest.test.mjs test/shared-session-permissions.test.mjs",
+    "test:unit": "node --test test/audio-track.test.mjs test/proxy-range.test.mjs test/video-providers.test.mjs test/stream-anonymization.test.mjs test/version-gate.test.mjs test/hls-detection.test.mjs test/quality-levels.test.mjs test/download-recovery.test.mjs test/session-guards.test.mjs test/changelog.test.mjs test/android-release-manifest.test.mjs test/ios-release-manifest.test.mjs test/shared-session-permissions.test.mjs test/native-back.test.mjs",
     "test:providers:live": "node test/video-providers-live.mjs",
     "test:providers:electron": "electron test/video-providers-electron-smoke.mjs",
     "test:providers:ui": "node test/video-providers-ui-smoke.mjs",

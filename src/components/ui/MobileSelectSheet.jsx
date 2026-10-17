@@ -1,7 +1,9 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { Check } from "lucide-react";
 import { createPortal } from "react-dom";
 
 export function MobileSelectSheet({ open, title, options = [], value, onChange, onClose }) {
+  useNativeBack(open, onClose);
   if (!open || typeof document === "undefined") return null;
   return createPortal(
     <div

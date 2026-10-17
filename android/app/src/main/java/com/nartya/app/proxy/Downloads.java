@@ -1,20 +1,23 @@
 package com.nartya.app.proxy;
 
+import android.util.AtomicFile;
 import android.util.Base64;
+import android.util.Log;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import com.nartya.app.storage.DownloadPolicy;
 
 import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.RandomAccessFile;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -38,8 +41,6 @@ public class Downloads {
         void onProgress(JSONObject item);
     }
 
-    private static final int MP4_CONNECTIONS = 4;
-    private static final long MP4_MIN_PARALLEL_BYTES = 8L * 1024 * 1024;
     private static final int HLS_SEGMENT_CONCURRENCY = 6;
     private static final int SCAN_PAGE_CONCURRENCY = 6;
     private static final int IO_THREADS = 12; // 2 jobs × 6 segments au maximum
@@ -48,6 +49,89 @@ public class Downloads {
     private final File root;
     private final OkHttpClient client;
     private final Listener listener;
+    private final Map<String, String> stopReasons = new ConcurrentHashMap<>();
+    private final java.util.Set<String> removals = ConcurrentHashMap.newKeySet();
+    private volatile DownloadPolicy policy;
+    private final Map<AtomicBoolean, java.util.Set<okhttp3.Call>> calls = new ConcurrentHashMap<>();
+
+    private Response execute(Request request, AtomicBoolean flag) throws IOException {
+        okhttp3.Call call = client.newCall(request);
+        java.util.Set<okhttp3.Call> active = flag == null ? null : calls.computeIfAbsent(flag, key -> ConcurrentHashMap.newKeySet());
+        if (active != null) active.add(call);
+        if (flag != null && flag.get()) call.cancel();
+        try {
+            Response response = call.execute();
+            okhttp3.ResponseBody body = response.body();
+            if (body == null || active == null) { if (active != null) active.remove(call); return response; }
+            okio.BufferedSource stream = okio.Okio.buffer(new okio.ForwardingSource(body.source()) {
+                @Override public void close() throws IOException {
+                    try { super.close(); } finally { active.remove(call); }
+                }
+            });
+            return response.newBuilder().body(new okhttp3.ResponseBody() {
+                @Override public okhttp3.MediaType contentType() { return body.contentType(); }
+                @Override public long contentLength() { return body.contentLength(); }
+                @Override public okio.BufferedSource source() { return stream; }
+            }).build();
+        } catch (IOException error) {
+            if (active != null) active.remove(call);
+            throw error;
+        }
+    }
+
+    private void cancelCalls(AtomicBoolean flag) {
+        java.util.Set<okhttp3.Call> active = calls.get(flag);
+        if (active != null) for (okhttp3.Call call : active) call.cancel();
+    }
+
+    public void setPolicy(DownloadPolicy policy) { this.policy = policy; }
+
+    public synchronized boolean pause(String id, String reason) {
+        AtomicBoolean flag = cancelFlags.get(id);
+        if (flag == null) return false;
+        stopReasons.put(id, reason);
+        flag.set(true);
+        cancelCalls(flag);
+        patch(id, "status", "pausing", "error", reason);
+        return true;
+    }
+
+    public void pauseAll(String reason) {
+        for (String id : cancelFlags.keySet()) pause(id, reason);
+    }
+
+    public void checkpoint() { saveIndex(); }
+
+    public void shutdown() {
+        pauseAll("En pause");
+        client.dispatcher().cancelAll();
+        jobs.shutdownNow();
+        io.shutdownNow();
+    }
+
+    private static boolean wifiFailure(Throwable error) {
+        while (error != null) {
+            if (error instanceof DownloadPolicy.WifiRequired) return true;
+            error = error.getCause();
+        }
+        return false;
+    }
+
+    private void checkTransfer(AtomicBoolean cancel) throws IOException {
+        if (cancel.get()) throw new IOException("Interrompu");
+        if (policy != null) policy.check(0);
+    }
+
+    private synchronized void finishJob(String id, AtomicBoolean cancel) {
+        cancelFlags.remove(id, cancel);
+        calls.remove(cancel);
+        if (removals.remove(id)) {
+            deleteDir(ProxyServer.itemDir(id));
+        } else if (stopReasons.containsKey(id)) {
+            String reason = stopReasons.remove(id);
+            patch(id, "status", "Wi-Fi requis".equals(reason) ? "waiting_wifi" : "paused", "error", reason);
+        }
+    }
     private volatile int proxyPort = 0;
     private volatile String proxyToken = "";
 
@@ -61,6 +145,7 @@ public class Downloads {
         final String provider;
         final String referer;
         final String origin;
+        AtomicBoolean cancel;
 
         SourceContext(String provider, String referer, String origin) {
             this.provider = provider != null ? provider : "";
@@ -82,7 +167,7 @@ public class Downloads {
         // pour la reprise.
         for (JSONObject it : index.values()) {
             String st = it.optString("status");
-            if ("downloading".equals(st) || "queued".equals(st)) {
+            if ("downloading".equals(st) || "queued".equals(st) || "pausing".equals(st)) {
                 try {
                     boolean isScan = "scan".equals(it.optString("type"));
                     boolean complete = isScan
@@ -110,8 +195,13 @@ public class Downloads {
 
     // API exposée au plugin
 
-    public List<JSONObject> list() {
-        return new ArrayList<>(index.values());
+    public synchronized List<JSONObject> list() {
+        List<JSONObject> snapshot = new ArrayList<>();
+        for (JSONObject item : index.values()) {
+            try { snapshot.add(new JSONObject(item.toString())); }
+            catch (Exception error) { Log.e("NartyaDownloads", "État de téléchargement invalide", error); }
+        }
+        return snapshot;
     }
 
     public int activeCount() {
@@ -127,16 +217,18 @@ public class Downloads {
         boolean isScan = "scan".equals(payload.optString("type"));
         String id = payload.optString("id", null);
         String directUrl = isScan ? null : payload.optString("directUrl", null);
-        if (id == null || id.isEmpty() || (!isScan && directUrl == null)) return false;
+        if (id == null || id.isEmpty() || (!isScan && directUrl == null) || cancelFlags.containsKey(id)) return false;
         if (isScan && (payload.optString("oeuvre", null) == null || payload.optInt("pages", 0) <= 0
                 || payload.optString("imageBase", null) == null)) return false;
 
         JSONObject existing = index.get(id);
         if (existing != null) {
             String st = existing.optString("status");
-            if ("done".equals(st) || "downloading".equals(st) || "queued".equals(st)) return false;
+            if ("done".equals(st) || "downloading".equals(st) || "queued".equals(st) || "pausing".equals(st)) return false;
         }
 
+        try { if (policy != null) policy.check(0); }
+        catch (IOException error) { throw new IllegalStateException(error.getMessage(), error); }
         JSONObject item = existing != null ? existing : new JSONObject();
         try {
             item.put("id", id);
@@ -171,11 +263,10 @@ public class Downloads {
             item.remove("file");
         } catch (Exception ignored) {}
         index.put(id, item);
-        saveIndex();
-        emit(item);
-
         AtomicBoolean cancel = new AtomicBoolean(false);
         cancelFlags.put(id, cancel);
+        saveIndex();
+        emit(item);
         final String coverUrl = payload.optString("animeCover", "");
 
         if (isScan) {
@@ -192,20 +283,20 @@ public class Downloads {
         return true;
     }
 
-    public void cancel(String id) {
-        AtomicBoolean c = cancelFlags.get(id);
-        if (c != null) c.set(true);
-        remove(id);
-    }
+    public void cancel(String id) { remove(id); }
 
-    public void remove(String id) {
-        // Un id vide désignerait la racine des téléchargements.
+    public synchronized void remove(String id) {
         if (id == null || id.isEmpty()) return;
-        AtomicBoolean c = cancelFlags.get(id);
-        if (c != null) c.set(true);
-        deleteDir(ProxyServer.itemDir(id));
+        AtomicBoolean flag = cancelFlags.get(id);
+        if (flag != null) {
+            removals.add(id);
+            stopReasons.remove(id);
+            flag.set(true);
+            cancelCalls(flag);
+        } else {
+            deleteDir(ProxyServer.itemDir(id));
+        }
         index.remove(id);
-        cancelFlags.remove(id);
         saveIndex();
     }
 
@@ -216,10 +307,13 @@ public class Downloads {
         File dir = ProxyServer.itemDir(id);
         dir.mkdirs();
         try {
+            checkTransfer(cancel);
             patch(id, "status", "downloading", "percent", 0);
 
             // Best-effort, pour la bibliothèque hors ligne.
+            source.cancel = cancel;
             SourceContext imageSource = new SourceContext(source.provider, "", "");
+            imageSource.cancel = cancel;
             if (!coverUrl.isEmpty() && cacheImage(coverUrl, imageSource, new File(dir, "cover.jpg")))
                 patch(id, "coverFile", "cover.jpg");
             if (!thumbUrl.isEmpty() && cacheImage(thumbUrl, imageSource, new File(dir, "thumb.jpg")))
@@ -239,10 +333,11 @@ public class Downloads {
             patch(id, "status", "done", "percent", 100, "file", file, "sizeBytes", size,
                     "finishedAt", System.currentTimeMillis());
         } catch (Exception e) {
-            if (cancel.get()) return; // annulation utilisateur : remove() a déjà nettoyé
+            if (cancel.get()) return;
+            if (wifiFailure(e)) { stopReasons.put(id, "Wi-Fi requis"); return; }
             patch(id, "status", "error", "error", e.getMessage() != null ? e.getMessage() : "Échec");
         } finally {
-            cancelFlags.remove(id);
+            finishJob(id, cancel);
         }
     }
 
@@ -250,11 +345,13 @@ public class Downloads {
         File dir = ProxyServer.itemDir(id);
         dir.mkdirs();
         try {
+            checkTransfer(cancel);
             patch(id, "status", "downloading", "percent", 0);
             JSONObject item = index.get(id);
             String coverUrl = item != null ? item.optString("animeCover", "") : "";
             if (!coverUrl.isEmpty()) {
                 SourceContext imageSource = new SourceContext("", "", "");
+                imageSource.cancel = cancel;
                 if (cacheImage(coverUrl, imageSource, new File(dir, "cover.jpg"))) patch(id, "coverFile", "cover.jpg");
             }
             long size = downloadScanPages(id, dir, cancel);
@@ -263,9 +360,10 @@ public class Downloads {
                     "finishedAt", System.currentTimeMillis());
         } catch (Exception e) {
             if (cancel.get()) return;
+            if (wifiFailure(e)) { stopReasons.put(id, "Wi-Fi requis"); return; }
             patch(id, "status", "error", "error", e.getMessage() != null ? e.getMessage() : "Échec");
         } finally {
-            cancelFlags.remove(id);
+            finishJob(id, cancel);
         }
     }
 
@@ -291,7 +389,7 @@ public class Downloads {
         for (int w = 0; w < concurrency; w++) {
             workers.add(io.submit(() -> {
                 while (true) {
-                    if (cancel.get()) throw new RuntimeException("Annulé");
+                    checkTransfer(cancel);
                     int page = cursor.incrementAndGet();
                     if (page > totalF) return null;
                     File dest = new File(dir, "p" + String.format(Locale.ROOT, "%03d", page) + ".jpg");
@@ -311,7 +409,6 @@ public class Downloads {
                             patch(id, "status", "downloading", "percent", done * 100.0 / totalF, "sizeBytes", tot);
                         }
                     }
-                    return null;
                 }
             }));
         }
@@ -322,10 +419,10 @@ public class Downloads {
     private long downloadToFileDirect(String url, File dest, AtomicBoolean cancel) throws Exception {
         Exception last = null;
         for (int attempt = 1; attempt <= SEGMENT_MAX_ATTEMPTS; attempt++) {
-            if (cancel.get()) throw new Exception("Annulé");
+            checkTransfer(cancel);
             try {
                 Request request = new Request.Builder().url(url).get().build();
-                Response res = client.newCall(request).execute();
+                Response res = execute(request, cancel);
                 if (!res.isSuccessful()) { res.close(); throw new Exception("HTTP " + res.code()); }
                 File tmp = new File(dest.getParentFile(), dest.getName() + ".part");
                 long bytes = 0;
@@ -333,14 +430,15 @@ public class Downloads {
                     byte[] buf = new byte[64 * 1024];
                     int n;
                     while ((n = in.read(buf)) != -1) {
-                        if (cancel.get()) throw new Exception("Annulé");
+                        checkTransfer(cancel);
                         out.write(buf, 0, n);
                         bytes += n;
                     }
                 } finally {
                     res.close();
                 }
-                tmp.renameTo(dest);
+                DownloadFiles.requireLength(bytes, res.body().contentLength());
+                DownloadFiles.commit(tmp, dest);
                 return bytes;
             } catch (Exception e) {
                 if (cancel.get()) throw e;
@@ -363,113 +461,71 @@ public class Downloads {
     // MP4
 
     private long[] downloadMp4(String id, String url, SourceContext source, File dir, AtomicBoolean cancel) throws Exception {
-        long total = 0;
-        boolean acceptsRange = false;
-        try {
-            Response probe = fetch(url, source, false, "bytes=0-1");
-            if (probe.code() == 206) {
-                String cr = probe.header("Content-Range");
-                Matcher m = cr != null ? Pattern.compile("/(\\d+)\\s*$").matcher(cr) : null;
-                if (m != null && m.find()) { total = Long.parseLong(m.group(1)); acceptsRange = true; }
-            }
-            probe.close();
-        } catch (Exception ignored) {}
-
-        if (acceptsRange && total > MP4_MIN_PARALLEL_BYTES) {
-            try {
-                return downloadMp4Parallel(id, url, source, dir, total, cancel);
-            } catch (Exception e) {
-                if (cancel.get()) throw e;
-                // repli mono-flux
-            }
-        }
+        // A contiguous prefix supports pause and process recovery without sparse-file ambiguity.
+        // Discard legacy parallel files: their length never established which ranges were complete.
+        new File(dir, "video.mp4.part").delete();
+        new File(dir, "video.parallel.part").delete();
         return downloadMp4Single(id, url, source, dir, cancel);
     }
 
     private long[] downloadMp4Single(String id, String url, SourceContext source, File dir, AtomicBoolean cancel) throws Exception {
         File dest = new File(dir, "video.mp4");
-        File tmp = new File(dir, "video.mp4.part");
-        long received = tmp.exists() ? tmp.length() : 0;
+        // This file is always a contiguous prefix, never a sparse parallel download.
+        File tmp = new File(dir, "video.sequential.part");
+        File validatorFile = new File(dir, "video.validator");
+        String validator = DownloadFiles.readText(validatorFile);
+        File sourceFile = new File(dir, "video.source");
+        String sourceIdentity = DownloadFiles.identity(url);
+        long received = validator.isEmpty() || !sourceIdentity.equals(DownloadFiles.readText(sourceFile)) ? 0 : tmp.length();
         Response res = received > 0
-                ? fetch(url, source, false, "bytes=" + received + "-")
+                ? fetch(url, source, false, "bytes=" + received + "-", validator)
                 : fetch(url, source, false, null);
-        boolean resuming = received > 0 && res.code() == 206;
+        boolean resuming = received > 0 && res.code() == 206
+                && DownloadFiles.validRange(res.header("Content-Range"), received, -1)
+                && validator.equals(res.header("ETag", ""));
         if (!resuming && received > 0) {
             res.close();
             received = 0;
             res = fetch(url, source, false, null);
         }
-        if (!res.isSuccessful()) { res.close(); throw new Exception("HTTP " + res.code()); }
-        long total = resuming
-                ? totalFromContentRange(res.header("Content-Range"), received, res.body().contentLength())
+        if (res.code() != 200 && !(resuming && res.code() == 206)) {
+            int code = res.code(); res.close(); throw new IOException("Réponse vidéo invalide : HTTP " + code);
+        }
+        String etag = res.header("ETag", "");
+        // A crash between metadata and truncation must never attach a new validator to an old prefix.
+        try {
+            DownloadFiles.writeText(validatorFile, "");
+            if (!resuming) {
+                try (FileOutputStream reset = new FileOutputStream(tmp)) { reset.getFD().sync(); }
+            }
+            DownloadFiles.writeText(sourceFile, sourceIdentity);
+            DownloadFiles.writeText(validatorFile, etag.startsWith("W/") ? "" : etag);
+        } catch (IOException error) { res.close(); throw error; }
+        long total = resuming ? totalFromContentRange(res.header("Content-Range"), received, res.body().contentLength())
                 : res.body().contentLength();
         long lastEmit = 0;
-        try (InputStream in = res.body().byteStream(); FileOutputStream out = new FileOutputStream(tmp, resuming)) {
+        try (Response response = res; InputStream in = response.body().byteStream();
+             FileOutputStream out = new FileOutputStream(tmp, resuming)) {
             byte[] buf = new byte[64 * 1024];
             int n;
             while ((n = in.read(buf)) != -1) {
-                if (cancel.get()) throw new Exception("Annulé");
+                checkTransfer(cancel);
                 out.write(buf, 0, n);
                 received += n;
                 long now = System.currentTimeMillis();
                 if (now - lastEmit > 400) {
                     lastEmit = now;
-                    patch(id, "status", "downloading",
-                            "percent", total > 0 ? (received * 100.0 / total) : 0, "sizeBytes", received);
+                    patch(id, "status", "downloading", "percent", total > 0 ? received * 100.0 / total : 0, "sizeBytes", received);
                 }
             }
-        } finally {
-            res.close();
+            out.getFD().sync();
         }
-        tmp.renameTo(dest);
-        return new long[]{ received };
-    }
-
-    private long[] downloadMp4Parallel(String id, String url, SourceContext source, File dir, long total, AtomicBoolean cancel) throws Exception {
-        File dest = new File(dir, "video.mp4");
-        File tmp = new File(dir, "video.mp4.part");
-        try (RandomAccessFile raf = new RandomAccessFile(tmp, "rw")) {
-            raf.setLength(total);
-        }
-        int parts = Math.max(1, (int) Math.min(MP4_CONNECTIONS, (total + MP4_MIN_PARALLEL_BYTES - 1) / MP4_MIN_PARALLEL_BYTES));
-        long chunk = (total + parts - 1) / parts;
-        AtomicLong received = new AtomicLong(0);
-        List<Future<?>> futures = new ArrayList<>();
-        final long[] lastEmit = {0};
-
-        for (int i = 0; i < parts; i++) {
-            final long start = i * chunk;
-            if (start >= total) break;
-            final long end = Math.min(start + chunk - 1, total - 1);
-            futures.add(io.submit(() -> {
-                Response res = fetch(url, source, false, "bytes=" + start + "-" + end);
-                if (res.code() != 206) { res.close(); throw new RuntimeException("Range non honoré (HTTP " + res.code() + ")"); }
-                try (InputStream in = res.body().byteStream();
-                     RandomAccessFile raf = new RandomAccessFile(tmp, "rw")) {
-                    raf.seek(start);
-                    byte[] buf = new byte[64 * 1024];
-                    int n;
-                    while ((n = in.read(buf)) != -1) {
-                        if (cancel.get()) throw new RuntimeException("Annulé");
-                        raf.write(buf, 0, n);
-                        long tot = received.addAndGet(n);
-                        long now = System.currentTimeMillis();
-                        synchronized (lastEmit) {
-                            if (now - lastEmit[0] > 400) {
-                                lastEmit[0] = now;
-                                patch(id, "status", "downloading", "percent", tot * 100.0 / total, "sizeBytes", tot);
-                            }
-                        }
-                    }
-                } finally {
-                    res.close();
-                }
-                return null;
-            }));
-        }
-        awaitAll(futures);
-        tmp.renameTo(dest);
-        return new long[]{ total };
+        DownloadFiles.requireLength(received, total);
+        checkTransfer(cancel);
+        DownloadFiles.commit(tmp, dest);
+        validatorFile.delete();
+        sourceFile.delete();
+        return new long[]{received};
     }
 
     // HLS
@@ -481,26 +537,41 @@ public class Downloads {
             if (variant != null) pl = fetchPlaylist(variant, source);
         }
 
+        File fingerprintFile = new File(dir, "hls.fingerprint");
+        String identity = Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-256")
+            .digest((pl.baseUrl + "\n" + pl.text).getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
+        if (!identity.equals(DownloadFiles.readText(fingerprintFile))) {
+            File[] fragments = dir.listFiles();
+            if (fragments != null) for (File file : fragments) {
+                if (file.getName().matches("(seg.*|key.*\\.bin.*|init.*\\.mp4.*|playlist\\.m3u8.*)")) {
+                    if (!file.delete()) throw new IOException("Impossible de nettoyer une ancienne source HLS");
+                }
+            }
+            DownloadFiles.writeText(fingerprintFile, identity);
+        }
+        if (pl.text.contains("#EXT-X-BYTERANGE")) throw new IOException("Téléchargement HLS par plages non pris en charge");
         String[] lines = pl.text.split("\r?\n");
         List<String[]> segments = new ArrayList<>(); // [url, name]
         List<String> outLines = new ArrayList<>();
-        String keyUrl = null, mapUrl = null;
+        List<String[]> resources = new ArrayList<>();
 
         for (String raw : lines) {
             String line = raw.trim();
             if (line.startsWith("#EXT-X-KEY")) {
                 String uri = attrUri(line);
                 if (uri != null && !line.matches(".*METHOD=NONE.*")) {
-                    keyUrl = resolveUri(uri, pl.baseUrl);
-                    outLines.add(raw.replaceFirst("URI=\"[^\"]+\"", "URI=\"key.bin\""));
+                    String name = "key" + resources.size() + ".bin";
+                    resources.add(new String[]{resolveUri(uri, pl.baseUrl), name});
+                    outLines.add(raw.replaceFirst("URI=\"[^\"]+\"", "URI=\"" + name + "\""));
                 } else outLines.add(raw);
                 continue;
             }
             if (line.startsWith("#EXT-X-MAP")) {
                 String uri = attrUri(line);
                 if (uri != null) {
-                    mapUrl = resolveUri(uri, pl.baseUrl);
-                    outLines.add(raw.replaceFirst("URI=\"[^\"]+\"", "URI=\"init.mp4\""));
+                    String name = "init" + resources.size() + ".mp4";
+                    resources.add(new String[]{resolveUri(uri, pl.baseUrl), name});
+                    outLines.add(raw.replaceFirst("URI=\"[^\"]+\"", "URI=\"" + name + "\""));
                 } else outLines.add(raw);
                 continue;
             }
@@ -511,11 +582,9 @@ public class Downloads {
         }
         if (segments.isEmpty()) throw new Exception("Playlist HLS sans segment");
 
-        if (keyUrl != null && !isCompleteFragment(new File(dir, "key.bin"))) {
-            downloadToFile(keyUrl, source, new File(dir, "key.bin"), cancel);
-        }
-        if (mapUrl != null && !isCompleteFragment(new File(dir, "init.mp4"))) {
-            downloadToFile(mapUrl, source, new File(dir, "init.mp4"), cancel);
+        for (String[] resource : resources) {
+            File file = new File(dir, resource[1]);
+            if (!isCompleteFragment(file)) downloadToFile(resource[0], source, file, cancel);
         }
 
         final int totalSeg = segments.size();
@@ -529,7 +598,7 @@ public class Downloads {
         for (int w = 0; w < concurrency; w++) {
             workers.add(io.submit(() -> {
                 while (true) {
-                    if (cancel.get()) throw new RuntimeException("Annulé");
+                    checkTransfer(cancel);
                     int i = cursor.getAndIncrement();
                     if (i >= totalSeg) return null;
                     String[] seg = segments.get(i);
@@ -590,6 +659,7 @@ public class Downloads {
         if (!res.isSuccessful()) { res.close(); throw new Exception("HTTP " + res.code()); }
         Pl pl = new Pl();
         pl.text = res.body().string();
+        if (!pl.text.trim().startsWith("#EXTM3U")) { res.close(); throw new IOException("Playlist HLS invalide"); }
         String upstream = res.header("X-Upstream-Url");
         pl.baseUrl = upstream != null ? upstream : url;
         res.close();
@@ -633,7 +703,7 @@ public class Downloads {
     private long downloadToFile(String url, SourceContext source, File dest, AtomicBoolean cancel) throws Exception {
         Exception last = null;
         for (int attempt = 1; attempt <= SEGMENT_MAX_ATTEMPTS; attempt++) {
-            if (cancel.get()) throw new Exception("Annulé");
+            checkTransfer(cancel);
             try {
                 Response res = fetch(url, source, false, null);
                 if (!res.isSuccessful()) { res.close(); throw new Exception("HTTP " + res.code()); }
@@ -643,14 +713,15 @@ public class Downloads {
                     byte[] buf = new byte[64 * 1024];
                     int n;
                     while ((n = in.read(buf)) != -1) {
-                        if (cancel.get()) throw new Exception("Annulé");
+                        checkTransfer(cancel);
                         out.write(buf, 0, n);
                         bytes += n;
                     }
                 } finally {
                     res.close();
                 }
-                tmp.renameTo(dest);
+                DownloadFiles.requireLength(bytes, res.body().contentLength());
+                DownloadFiles.commit(tmp, dest);
                 return bytes;
             } catch (Exception e) {
                 if (cancel.get()) throw e;
@@ -679,6 +750,10 @@ public class Downloads {
     // Réseau, via le proxy local
 
     private Response fetch(String targetUrl, SourceContext source, boolean raw, String range) throws Exception {
+        return fetch(targetUrl, source, raw, range, null);
+    }
+
+    private Response fetch(String targetUrl, SourceContext source, boolean raw, String range, String validator) throws Exception {
         String u = "http://127.0.0.1:" + proxyPort + "/video/proxy?url=" + enc(targetUrl)
                 + "&provider=" + enc(source != null ? source.provider : "");
         if (source != null && !source.referer.isEmpty()) u += "&referer=" + enc(source.referer);
@@ -687,20 +762,18 @@ public class Downloads {
         u += "&t=" + enc(proxyToken);
         Request.Builder rb = new Request.Builder().url(u).get();
         if (range != null) rb.header("Range", range);
-        return client.newCall(rb.build()).execute();
+        if (validator != null) rb.header("If-Range", validator);
+        return execute(rb.build(), source != null ? source.cancel : null);
     }
 
     // Index persistant
 
     private void loadIndex() {
-        File f = new File(root, "index.json");
-        if (!f.exists()) return;
         try {
-            byte[] data = new byte[(int) f.length()];
-            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) { in.read(data); }
-            JSONObject obj = new JSONObject(new String(data, "UTF-8"));
-            IterableKeys(obj);
-        } catch (Exception ignored) {}
+            AtomicFile file = new AtomicFile(new File(root, "index.json"));
+            if (!file.getBaseFile().exists() && !new File(root, "index.json.bak").exists()) return;
+            IterableKeys(new JSONObject(new String(file.readFully(), StandardCharsets.UTF_8)));
+        } catch (Exception error) { Log.e("NartyaDownloads", "Index illisible, fichiers conservés", error); }
     }
 
     private void IterableKeys(JSONObject obj) {
@@ -713,21 +786,28 @@ public class Downloads {
     }
 
     private synchronized void saveIndex() {
+        AtomicFile file = new AtomicFile(new File(root, "index.json"));
+        FileOutputStream output = null;
         try {
             JSONObject obj = new JSONObject();
             for (Map.Entry<String, JSONObject> e : index.entrySet()) obj.put(e.getKey(), e.getValue());
-            writeFile(new File(root, "index.json"), obj.toString().getBytes("UTF-8"));
+            output = file.startWrite();
+            output.write(obj.toString().getBytes(StandardCharsets.UTF_8));
+            file.finishWrite(output);
             lastIndexSaveAt = System.currentTimeMillis();
-        } catch (Exception ignored) {}
+        } catch (Exception error) {
+            if (output != null) file.failWrite(output);
+            Log.e("NartyaDownloads", "Échec sauvegarde de l'index", error);
+        }
     }
 
     private synchronized void saveIndexThrottled() {
         if (System.currentTimeMillis() - lastIndexSaveAt >= 2_000) saveIndex();
     }
 
-    private void patch(String id, Object... kv) {
+    private synchronized void patch(String id, Object... kv) {
         JSONObject it = index.get(id);
-        if (it == null) return;
+        if (it == null || (stopReasons.containsKey(id) && kv.length > 1 && "downloading".equals(kv[1]))) return;
         boolean progressUpdate = false;
         try {
             for (int i = 0; i + 1 < kv.length; i += 2) {

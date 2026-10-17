@@ -132,3 +132,12 @@ export function downloadId(slug, seasonId, ep, lang) {
 export function scanDownloadId(slug, oeuvre, chapter) {
   return `scan::${slug}::${oeuvre}::${chapter}`;
 }
+
+/** Android-only controls. Errors remain visible to the caller. */
+export const canPauseDownloads = () => platform.os === "android" && !!api()?.pause;
+export async function pauseDownload(id) {
+  if (!canPauseDownloads()) throw new Error("Pause indisponible");
+  return api().pause(id);
+}
+export async function getDownloadStorage() { return api()?.storage?.() ?? null; }
+export async function configureDownloads(options) { return api()?.configure?.(options) ?? null; }

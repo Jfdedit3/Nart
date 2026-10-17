@@ -36,7 +36,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(PlayerPlugin.class);
         super.onCreate(savedInstanceState);
 
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        setRequestedOrientation(getResources().getConfiguration().smallestScreenWidthDp >= 600
+            ? ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
@@ -56,6 +57,10 @@ public class MainActivity extends BridgeActivity {
         super.onConfigurationChanged(newConfig);
         if (immersiveRequested) {
             getWindow().getDecorView().post(this::hideSystemBars);
+        } else {
+            int orientation = newConfig.smallestScreenWidthDp >= 600
+                ? ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+            if (getRequestedOrientation() != orientation) setRequestedOrientation(orientation);
         }
     }
 

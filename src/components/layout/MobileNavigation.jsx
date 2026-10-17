@@ -1,3 +1,4 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
@@ -127,6 +128,7 @@ export default function MobileNavigation({ searchPath = "/recherche", forceVisib
     return () => window.removeEventListener("keydown", close);
   }, [open]);
 
+  useNativeBack(open, () => setOpen(false));
   const sheetItems = useMemo(
     () =>
       [

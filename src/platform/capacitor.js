@@ -1,10 +1,11 @@
+import { handleNativeBack } from "../lib/nativeBack";
 import { Capacitor, registerPlugin, SystemBars, SystemBarsStyle } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
 import { Device } from "@capacitor/device";
 import { Haptics, ImpactStyle } from "@capacitor/haptics";
 import { ensureRecipe, getRecipe, getSource } from "@/shared/sourceRecipe";
-import { SITE_URL, SITE_HOST } from "@/config/instance";
+import { SITE_URL, SITE_HOST, APP_SCHEME } from "@/config/instance";
 import {
   extractFromHtml,
   isExtractedVideoUrlConsistentWithEmbed,
@@ -203,6 +204,11 @@ function rememberDownloadTarget(target) {
 
 let authCallback = null;
 let navigationCallback = null;
+let pendingNavigation = null;
+function publishNavigation(route) {
+  if (navigationCallback) navigationCallback(route);
+  else pendingNavigation = route;
+}
 let urlListenerAttached = false;
 let captchaResolvers = [];
 
@@ -232,16 +238,36 @@ function attachUrlListener() {
         resolvers.forEach((resolve) => resolve(result));
         return;
       }
+      if (parsed.hostname === "downloads" && parsed.searchParams.get("resume") === "1") {
+        sessionStorage.setItem("nartya-resume-downloads", "1");
+        window.dispatchEvent(new Event("nartya-resume-downloads"));
+      }
       const route = `/${parsed.hostname}${parsed.pathname === "/" ? "" : parsed.pathname}`;
-      if (route !== "/") navigationCallback?.(route);
+      if (route !== "/") publishNavigation(route);
     } catch (_) {}
   });
 }
 
 if (Capacitor.isNativePlatform()) {
   attachUrlListener();
+  if (Capacitor.getPlatform() === "android") {
+    void NartyaProxy.addListener("downloadResumeNeeded", () => window.dispatchEvent(new Event("nartya-wifi-ready")));
+  }
+  void App.getLaunchUrl().then(({ url } = {}) => {
+    if (!url) return;
+    const parsed = new URL(url);
+    if (parsed.hostname === "downloads") {
+      if (parsed.searchParams.get("resume") === "1") {
+        sessionStorage.setItem("nartya-resume-downloads", "1");
+        window.dispatchEvent(new Event("nartya-resume-downloads"));
+      }
+      publishNavigation("/downloads");
+    }
+  }).catch(() => {});
   void App.addListener("backButton", ({ canGoBack }) => {
-    if (canGoBack || window.history.length > 1) window.history.back();
+    if (handleNativeBack()) return;
+    if (document.fullscreenElement) { void document.exitFullscreen().catch(() => {}); return; }
+    if (window.history.state?.idx > 0 || (canGoBack && window.history.state?.idx == null)) window.history.back();
     else void App.exitApp();
   });
 }
@@ -471,6 +497,9 @@ export const capacitorPlatform = {
           }),
         );
     },
+    pause: (id) => NartyaProxy.downloadPause({ id }),
+    storage: () => Capacitor.getPlatform() === "android" ? NartyaProxy.downloadStorage() : Promise.resolve(null),
+    configure: (options) => Capacitor.getPlatform() === "android" ? NartyaProxy.downloadConfigure(options) : Promise.resolve(null),
     cancel: (id) => NartyaProxy.downloadCancel({ id }),
     async cancelSeason(payload) {
       const { items = [] } = await this.list();
@@ -533,7 +562,7 @@ export const capacitorPlatform = {
   // Pas l'App Link HTTPS : certains constructeurs désactivent sa vérification pour un APK hors
   // Play Store, et le retour OAuth reste alors dans le navigateur.
   async getAuthRedirectUrl() {
-    return "nartya://auth-callback";
+    return `${APP_SCHEME}://auth-callback`;
   },
   /**
    * Le widget inline échoue dans la WebView : `captcha.html` s'ouvre dans un Custom Tab et
@@ -569,6 +598,11 @@ export const capacitorPlatform = {
   onNavigate(callback) {
     navigationCallback = typeof callback === "function" ? callback : null;
     attachUrlListener();
+    if (navigationCallback && pendingNavigation) {
+      const route = pendingNavigation;
+      pendingNavigation = null;
+      navigationCallback(route);
+    }
     return () => {
       if (navigationCallback === callback) navigationCallback = null;
     };
@@ -579,6 +613,16 @@ export const capacitorPlatform = {
     } catch {
       return null;
     }
+  },
+  cancelUpdate: () => NartyaUpdater.cancel(),
+  onUpdateProgress(callback) {
+    const handle = NartyaUpdater.addListener("progress", callback);
+    return () => void handle.then((listener) => listener.remove()).catch(() => {});
+  },
+  setMediaPlayback: (options) => NartyaPlayer.setPlayback(options).catch(() => {}),
+  onMediaControl(callback) {
+    const handle = NartyaPlayer.addListener("mediaControl", callback);
+    return () => void handle.then((listener) => listener.remove()).catch(() => {});
   },
   async installUpdate(options) {
     try {

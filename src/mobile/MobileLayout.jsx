@@ -40,7 +40,7 @@ export default function MobileLayout() {
       ) : null}
       <main
         ref={mainRef}
-        className="relative z-10 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain pb-[calc(4rem+env(safe-area-inset-bottom))]"
+        className="relative z-10 mx-auto w-full max-w-[1600px] flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain pb-[calc(4rem+env(safe-area-inset-bottom))]"
       >
         <Outlet />
       </main>

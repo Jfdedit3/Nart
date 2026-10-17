@@ -1,9 +1,11 @@
+import { useNativeBack } from "@/hooks/useNativeBack";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Image, LoaderCircle, X } from "lucide-react";
 import DiscordIcon from "@/components/icons/DiscordIcon";
 
 export default function DiscordSyncModal({ offer, pending, onConfirm, onCancel }) {
+  useNativeBack(true, () => { if (!pending) onCancel(); });
   const [selection, setSelection] = useState({ avatar: false, banner: false });
 
   useEffect(() => {
