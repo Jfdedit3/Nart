@@ -84,6 +84,25 @@ public class DownloadsIntegrationTest {
         assertTrue(downloads.start(payload("etag"))); awaitSuccess();
         assertArrayEquals(video, Files.readAllBytes(new File(dir, "video.mp4").toPath()));
     }
+    @Test public void identicalEtagsOnDifferentSourcesDoNotShareAPrefix() throws Exception {
+        File dir = ProxyServer.itemDir("source"); assertTrue(dir.mkdirs());
+        Files.write(new File(dir, "video.sequential.part").toPath(), new byte[]{99, 99, 99});
+        DownloadFiles.writeText(new File(dir, "video.validator"), "\"same\"");
+        DownloadFiles.writeText(new File(dir, "video.source"), DownloadFiles.identity("https://other.example/video.mp4"));
+        server.setDispatcher(new Dispatcher() {
+            @Override public MockResponse dispatch(RecordedRequest request) {
+                String range = request.getHeader("Range");
+                if ("bytes=0-1".equals(range)) return new MockResponse().setResponseCode(206)
+                    .setHeader("ETag", "\"same\"").setHeader("Content-Range", "bytes 0-1/6").setBody("ne");
+                if (range != null) return new MockResponse().setResponseCode(206)
+                    .setHeader("ETag", "\"same\"").setHeader("Content-Range", "bytes 3-5/6").setBody("123");
+                return new MockResponse().setHeader("ETag", "\"same\"").setBody("new123");
+            }
+        });
+        assertTrue(downloads.start(payload("source"))); awaitSuccess();
+        assertEquals("new123", DownloadFiles.readText(new File(dir, "video.mp4")));
+    }
+
     @Test public void changingHlsSourcesNeverReusesTheOldFragments() throws Exception {
         File dir = ProxyServer.itemDir("hls"); assertTrue(dir.mkdirs());
         Files.write(new File(dir, "seg00000.ts").toPath(), new byte[]{99});

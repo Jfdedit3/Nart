@@ -511,10 +511,15 @@ public class Downloads {
             int code = res.code(); res.close(); throw new IOException("Réponse vidéo invalide : HTTP " + code);
         }
         String etag = res.header("ETag", "");
-        // Invalidate the old validator before changing the source metadata.
-        DownloadFiles.writeText(validatorFile, "");
-        DownloadFiles.writeText(sourceFile, sourceIdentity);
-        DownloadFiles.writeText(validatorFile, etag.startsWith("W/") ? "" : etag);
+        // A crash between metadata and truncation must never attach a new validator to an old prefix.
+        try {
+            DownloadFiles.writeText(validatorFile, "");
+            if (!resuming) {
+                try (FileOutputStream reset = new FileOutputStream(tmp)) { reset.getFD().sync(); }
+            }
+            DownloadFiles.writeText(sourceFile, sourceIdentity);
+            DownloadFiles.writeText(validatorFile, etag.startsWith("W/") ? "" : etag);
+        } catch (IOException error) { res.close(); throw error; }
         long total = resuming ? totalFromContentRange(res.header("Content-Range"), received, res.body().contentLength())
                 : res.body().contentLength();
         long lastEmit = 0;
